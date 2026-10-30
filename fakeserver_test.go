@@ -2,6 +2,7 @@ package gmodbus
 
 import (
 	"bufio"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"sync"
@@ -58,6 +59,22 @@ func newFakeServer(t *testing.T) *fakeServer {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
+	return newFakeServerOn(t, ln)
+}
+
+// newTLSFakeServer starts the same server behind an in-process TLS listener.
+func newTLSFakeServer(t *testing.T, cfg *tls.Config) *fakeServer {
+	t.Helper()
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", cfg)
+	if err != nil {
+		t.Fatalf("listen TLS: %v", err)
+	}
+	return newFakeServerOn(t, ln)
+}
+
+// newFakeServerOn runs the fake server on an already opened listener.
+func newFakeServerOn(t *testing.T, ln net.Listener) *fakeServer {
+	t.Helper()
 	s := &fakeServer{t: t, ln: ln}
 	s.wg.Add(1)
 	go s.accept()
@@ -106,6 +123,13 @@ func (s *fakeServer) count() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.requests)
+}
+
+// connectionCount reports how many connections the server accepted so far.
+func (s *fakeServer) connectionCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.conns)
 }
 
 // close stops the listener, closes every accepted connection and waits for the

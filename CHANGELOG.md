@@ -24,7 +24,19 @@
   fast path.
 - `Poll` runner: validated `Task` list, one schedule per task, errors reported
   through a callback, cancellation-aware shutdown.
+- Opt-in `Reconnect` policy (`ReconnectPolicy`): after a transport failure or a
+  peer close the client drops the connection, redials with bounded, jittered
+  exponential backoff (`Delay`, `MaxDelay`, `MaxAttempts`) inside the caller's
+  context and retries the in-flight request. A nil policy keeps the fail-fast
+  `ErrClosed` behavior; `Close` interrupts a wait or dial.
+- `TLS` on the built-in dialer, with the handshake bounded by `DialTimeout` and
+  failures classified as `ErrTLSConfig` (permanent) or `ErrTLSHandshake`
+  (transient).
+- `Dialer` for a custom transport (TLS, proxy, test double); it takes precedence
+  over `TLS` and owns the connection.
 - Tests against an in-process fake Modbus TCP server built on the codec: every
   operation asserted on the decoded request, exception mapping, retry after a
   timeout, exhausted retries, transaction and unit mismatch, a closed client,
-  non-interleaved concurrent callers, poller scheduling and metrics.
+  non-interleaved concurrent callers, poller scheduling, metrics, reconnect
+  recovery and give-up, close during backoff, bounded/jittered backoff, TLS with
+  a test-generated certificate, and custom dialers.

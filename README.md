@@ -17,6 +17,13 @@ A **Modbus TCP master** for Go, built on the typed Modbus codec in
 - `Timeout` bounds each attempt, `Retries` bounds timeout and transport retries,
   and a Modbus exception response is a delivered answer: it becomes a typed
   `*gmodbus.Error` and is never retried.
+- Optional automatic reconnection: after a transport failure or a connection
+  closed by the peer, the client redials with bounded, jittered exponential
+  backoff and retries the in-flight request. Without the policy it keeps the
+  fail-fast `ErrClosed` behavior.
+- Pluggable transport: TLS with a handshake bounded by `DialTimeout`, or a
+  custom `Dialer` for TLS, a proxy, a test double or any other `net.Conn`
+  source.
 - One request in flight per client. Concurrent callers are serialized on the
   wire and wait for the current exchange or for their own context.
 - Low-cardinality metrics hook (function code and result only) with a nil-hook
@@ -108,6 +115,20 @@ callback and returns only when the context ends. One failing task never stops
 the loop or another task. Task names must be non-empty and unique, and `Every`
 may not be shorter than `MinTaskInterval` (10ms).
 
+A long-lived poller should set `Reconnect` so a lost connection is recovered in
+place instead of every later task failing with `ErrClosed`:
+
+```go
+cli, err := gmodbus.Dial(ctx, gmodbus.Config{
+    Addr: "10.0.0.5:502",
+    Reconnect: &gmodbus.ReconnectPolicy{
+        Delay:       100 * time.Millisecond,
+        MaxDelay:    5 * time.Second,
+        MaxAttempts: 5,
+    },
+})
+```
+
 ## Behaviour
 
 ### Config
@@ -120,9 +141,13 @@ may not be shorter than `MinTaskInterval` (10ms).
 | `Retries` | extra attempts after the first, timeout/transport only | one attempt |
 | `MaxPDU` | inbound PDU limit | `modbus.MaxPDU` |
 | `Metrics` | per-attempt hook | none, and it costs nothing |
+| `Reconnect` | opt-in recovery policy: delay, max delay and dial budget | nil, fail-fast |
+| `TLS` | TLS config for the built-in dialer | plain TCP |
+| `Dialer` | custom transport dialer, takes precedence over `TLS` | built-in TCP dialer |
 
-Negative durations, a negative `Retries` and a `MaxPDU` above `modbus.MaxPDU`
-are rejected by `Dial`.
+Negative durations, a negative `Retries`, a negative reconnect field, a
+reconnect `MaxDelay` below `Delay`, and a `MaxPDU` above `modbus.MaxPDU` are
+rejected by `Dial`.
 
 ### Transactions and retries
 
@@ -142,10 +167,43 @@ An attempt either gets an answer or fails:
 - **mismatch** — the reply does not answer this request.
 
 A timeout or transport failure ends that attempt's connection, so a retry dials
-a fresh one. When attempts run out, or when a reply is unusable (mismatch or a
-frame the codec rejects), the client closes its connection for good: every later
-call fails fast with `ErrClosed` instead of looking healthy on a stream that may
-still carry a stale reply. Dial a new client to recover.
+a fresh one. Without `Reconnect`, when attempts run out, or when a reply is
+unusable (mismatch or a frame the codec rejects), the client closes its
+connection for good: every later call fails fast with `ErrClosed` instead of
+looking healthy on a stream that may still carry a stale reply. Dial a new
+client to recover.
+
+### Reconnection
+
+Set `Reconnect` to turn a transport failure or a connection closed by the peer
+into an in-place recovery. The client drops the broken connection and dials
+again with jittered exponential backoff: `Delay` for the first redial, doubling
+per attempt and capped at `MaxDelay`. `MaxAttempts` bounds the dials one
+operation may spend. Once a redial succeeds, the in-flight request is retried
+with the same transaction id, so a poller survives a short outage without
+seeing an error.
+
+The whole sequence runs inside the caller's context and holds the single
+exchange slot, so it adds no goroutine and no parallel dial. `Close` interrupts
+a backoff wait or dial immediately. When the budget runs out the client reports
+`ErrClosed` and stays closed; `Close` does the same explicitly. `Retries` still
+bounds timeouts: a timeout does not start a reconnect, but with a `Reconnect`
+policy a client that exhausts its timeout attempts remains usable for the next
+call.
+
+### TLS and custom dialers
+
+`TLS` wraps the built-in TCP connection and completes the handshake within
+`DialTimeout`. A failed handshake wraps `ErrTLSConfig` when retrying cannot help
+(certificate verification, a peer that does not speak TLS, a TLS alert) and
+`ErrTLSHandshake` when the failure is transient (timeout, reset, early EOF).
+A reconnect spends no attempts on `ErrTLSConfig`.
+
+`Dialer` takes precedence over `TLS`: when set, it owns the whole transport,
+receives `"tcp"` and `Addr`, and may perform TLS itself with
+`tls.DialWithDialer` or `tls.Client`. A `TLS` config alongside a custom dialer
+is allowed and simply unused. `Dialer` must honor its context; `Close` cancels
+it.
 
 ### Errors
 
@@ -154,6 +212,8 @@ still carry a stale reply. Dial a new client to recover.
 | `ErrClosed` | the client has no connection: closed, or out of attempts |
 | `ErrTimeout` | every attempt timed out |
 | `ErrTransactionMismatch` | the reply did not answer the request |
+| `ErrTLSConfig` | a permanent TLS handshake failure; a retry cannot fix it |
+| `ErrTLSHandshake` | a transient TLS handshake failure; a reconnect may retry it |
 | `*gmodbus.Error` | a Modbus exception response; unwraps to `modbus.ErrException` |
 
 Sentinels are wrapped, so test them with `errors.Is`; recover the typed

@@ -499,6 +499,18 @@ func TestDialValidatesConfig(t *testing.T) {
 		"negative dial":     {Addr: "127.0.0.1:0", DialTimeout: -time.Second},
 		"negative retries":  {Addr: "127.0.0.1:0", Retries: -1},
 		"max pdu too large": {Addr: "127.0.0.1:0", MaxPDU: modbus.MaxPDU + 1},
+		"negative reconnect delay": {
+			Addr: "127.0.0.1:0", Reconnect: &ReconnectPolicy{Delay: -time.Second},
+		},
+		"negative reconnect max delay": {
+			Addr: "127.0.0.1:0", Reconnect: &ReconnectPolicy{MaxDelay: -time.Second},
+		},
+		"negative reconnect attempts": {
+			Addr: "127.0.0.1:0", Reconnect: &ReconnectPolicy{MaxAttempts: -1},
+		},
+		"reconnect max below delay": {
+			Addr: "127.0.0.1:0", Reconnect: &ReconnectPolicy{Delay: 2 * time.Second, MaxDelay: time.Second},
+		},
 	}
 	for name, cfg := range cases {
 		if _, err := Dial(context.Background(), cfg); err == nil {

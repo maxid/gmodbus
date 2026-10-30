@@ -30,14 +30,28 @@
 // DialTimeout.
 //
 // When attempts run out, or when a response is unusable, the client closes its
-// connection for good: later calls fail fast with ErrClosed instead of looking
-// healthy on a stream that may still carry a stale reply. Dial a new client
-// (or replace the one a poller uses) to recover.
+// connection. Without a reconnect policy later calls fail fast with ErrClosed
+// instead of looking healthy on a stream that may still carry a stale reply.
+// With Config.Reconnect set, a transport failure or a connection closed by the
+// peer drops the broken connection and redials with bounded, jittered
+// exponential backoff inside the caller's context, then retries the in-flight
+// request. ErrClosed remains the result when the policy gives up or Close is
+// called. A timeout does not trigger reconnection by itself: Retries still
+// bounds attempts, and a client with a reconnect policy remains usable after
+// they run out.
+//
+// # TLS and custom transports
+//
+// Config.TLS wraps the built-in TCP dialer in TLS and completes the handshake
+// within DialTimeout. Config.Dialer replaces the built-in dialer and owns the
+// whole transport; TLS is then ignored, so a dialer may perform TLS itself,
+// use a proxy, or be a test transport.
 package gmodbus
 
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -71,7 +85,9 @@ type Config struct {
 	// Zero means DefaultTimeout.
 	Timeout time.Duration
 	// Retries is how many extra attempts follow the first when an attempt times
-	// out or hits a transport failure. Zero means a single attempt.
+	// out or hits a transport failure. Zero means a single attempt. With a
+	// Reconnect policy, transport failures use the policy's attempt budget and
+	// do not consume Retries.
 	Retries int
 	// MaxPDU bounds an inbound PDU. Zero means modbus.MaxPDU; a larger value is
 	// rejected.
@@ -79,13 +95,32 @@ type Config struct {
 	// Metrics receives one event per attempt. Nil costs nothing, and the client
 	// never calls it while holding its own lock.
 	Metrics Metrics
+	// Reconnect enables automatic recovery from a transport failure or a
+	// connection closed by the peer. Nil keeps the fail-fast behavior: the
+	// operation fails and the client closes for good. See ReconnectPolicy.
+	Reconnect *ReconnectPolicy
+	// TLS wraps the built-in TCP connection in TLS when Dialer is nil. The
+	// client clones the config and sets ServerName from Addr when it is empty.
+	// The handshake is bounded by DialTimeout and failures wrap ErrTLSConfig
+	// (permanent) or ErrTLSHandshake (transient).
+	//
+	// TLS is ignored when Dialer is set: the dialer owns the transport, so a
+	// caller may dial TLS itself (tls.DialWithDialer or tls.Client). A TLS
+	// config on a non-TLS custom dialer is allowed and simply unused.
+	TLS *tls.Config
+	// Dialer replaces the built-in TCP dialer. The network is always "tcp" and
+	// addr is Config.Addr. When set, it takes precedence over TLS and owns the
+	// whole transport: proxy, TLS and test dialers all use this hook. Dialer must
+	// honor ctx; Close cancels it.
+	Dialer func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 // Client is one Modbus TCP master connection.
 //
 // A Client is safe for concurrent use; its operations are serialized on the
-// wire. Close makes the client unusable, and a client whose exchange ran out of
-// attempts is closed too.
+// wire. Close makes the client unusable. Without a reconnect policy a client
+// whose exchange ran out of attempts is closed too; with one it stays usable
+// after a timeout and recovers from transport failures within the policy.
 type Client struct {
 	addr        string
 	timeout     time.Duration
@@ -93,6 +128,17 @@ type Client struct {
 	retries     int
 	maxPDU      int
 	metrics     Metrics
+
+	reconnectPolicy *ReconnectPolicy
+	// tlsConfig is only set when no custom Dialer is configured.
+	tlsConfig *tls.Config
+	dialer    func(ctx context.Context, network, addr string) (net.Conn, error)
+	jitter    func(int64) int64
+
+	// closeCtx ends every wait and cancels every in-flight dial when Close is
+	// called.
+	closeCtx    context.Context
+	closeCancel context.CancelFunc
 
 	// nextTx hands out transaction ids. Wraparound is tolerated: a reused id
 	// only matters for a reply that is still in flight, and the client never
@@ -113,7 +159,8 @@ type Client struct {
 
 // Dial connects to a Modbus TCP server and returns a client for it.
 //
-// Dial does no request: the connection is verified by the first operation.
+// Dial does no request: the connection is verified by the first operation. A
+// TLS handshake counts as part of the connect and is bounded by DialTimeout.
 func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.Addr == "" {
 		return nil, errors.New("gmodbus: Config.Addr is required")
@@ -130,6 +177,10 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.MaxPDU < 0 || cfg.MaxPDU > modbus.MaxPDU {
 		return nil, fmt.Errorf("gmodbus: Config.MaxPDU %d is outside 0..%d", cfg.MaxPDU, modbus.MaxPDU)
 	}
+	reconnect, err := normalizeReconnect(cfg.Reconnect)
+	if err != nil {
+		return nil, err
+	}
 	if cfg.DialTimeout == 0 {
 		cfg.DialTimeout = DefaultDialTimeout
 	}
@@ -139,28 +190,53 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.MaxPDU == 0 {
 		cfg.MaxPDU = modbus.MaxPDU
 	}
-	conn, err := dialTCP(ctx, cfg.Addr, cfg.DialTimeout)
+
+	// A custom Dialer owns the transport; TLS is only applied by the built-in
+	// dialer. Clone the config so a caller changing it later cannot race us.
+	var tlsConfig *tls.Config
+	if cfg.Dialer == nil && cfg.TLS != nil {
+		tlsConfig = cfg.TLS.Clone()
+		if tlsConfig.ServerName == "" {
+			if host, _, splitErr := net.SplitHostPort(cfg.Addr); splitErr == nil {
+				tlsConfig.ServerName = host
+			}
+		}
+	}
+
+	closeCtx, closeCancel := context.WithCancel(context.Background())
+	c := &Client{
+		addr:            cfg.Addr,
+		timeout:         cfg.Timeout,
+		dialTimeout:     cfg.DialTimeout,
+		retries:         cfg.Retries,
+		maxPDU:          cfg.MaxPDU,
+		metrics:         cfg.Metrics,
+		reconnectPolicy: reconnect,
+		tlsConfig:       tlsConfig,
+		dialer:          cfg.Dialer,
+		jitter:          jitterInt64N,
+		closeCtx:        closeCtx,
+		closeCancel:     closeCancel,
+		sem:             make(chan struct{}, 1),
+	}
+	conn, err := c.dial(ctx)
 	if err != nil {
+		closeCancel()
 		return nil, err
 	}
-	return &Client{
-		addr:        cfg.Addr,
-		timeout:     cfg.Timeout,
-		dialTimeout: cfg.DialTimeout,
-		retries:     cfg.Retries,
-		maxPDU:      cfg.MaxPDU,
-		metrics:     cfg.Metrics,
-		sem:         make(chan struct{}, 1),
-		conn:        conn,
-		r:           bufio.NewReader(conn),
-	}, nil
+	if _, err := c.install(conn); err != nil {
+		closeCancel()
+		return nil, err
+	}
+	return c, nil
 }
 
 // Addr returns the address the client was dialed with.
 func (c *Client) Addr() string { return c.addr }
 
-// Close closes the connection. It is idempotent: a second Close reports nil and
-// leaves a client that is already closed untouched.
+// Close closes the connection and stops any reconnect wait or dial. It is
+// idempotent: a second Close reports nil and leaves a client that is already
+// closed untouched.
 func (c *Client) Close() error {
 	c.mu.Lock()
 	if c.closed {
@@ -168,6 +244,7 @@ func (c *Client) Close() error {
 		return nil
 	}
 	c.closed = true
+	c.closeCancel()
 	conn := c.conn
 	c.conn, c.r = nil, nil
 	c.mu.Unlock()
@@ -319,12 +396,15 @@ func (c *Client) do(ctx context.Context, unit uint8, req modbus.Message) (modbus
 		return nil, ErrClosed
 	}
 
-	attempts := c.retries + 1
-	var (
-		lastOutcome outcome
-		lastErr     error
-	)
-	for attempt := 1; attempt <= attempts; attempt++ {
+	maxAttempts := c.retries + 1
+	policy := c.reconnectPolicy
+	reconnectBudget := 0
+	if policy != nil {
+		reconnectBudget = policy.MaxAttempts
+	}
+
+	var lastErr error
+	for attempt := 1; ; attempt++ {
 		var start time.Time
 		if c.metrics != nil {
 			start = time.Now()
@@ -364,23 +444,62 @@ func (c *Client) do(ctx context.Context, unit uint8, req modbus.Message) (modbus
 			c.record(req.Function(), ResultTransport, start)
 		}
 
-		lastOutcome, lastErr = oc, err
+		lastErr = err
 		// The failed attempt's connection may hold a partial or stale reply.
 		c.drop()
 		if c.isClosed() {
 			return nil, ErrClosed
 		}
-	}
 
-	// Every attempt failed. There is no live connection to fall back to, so the
-	// client reports ErrClosed from now on instead of looking healthy.
-	c.kill()
-	if lastOutcome == outcomeTimeout {
-		return nil, fmt.Errorf("%w: unit %d function %#02x after %d attempt(s): %v",
-			ErrTimeout, unit, req.Function(), attempts, lastErr)
+		if oc == outcomeTimeout {
+			if attempt >= maxAttempts {
+				if policy == nil {
+					c.kill()
+				}
+				return nil, fmt.Errorf("%w: unit %d function %#02x after %d attempt(s): %v",
+					ErrTimeout, unit, req.Function(), attempt, lastErr)
+			}
+			continue
+		}
+
+		// A transport failure without a reconnect policy follows the old retry
+		// budget; the dial on the next attempt is the whole recovery.
+		if policy == nil {
+			if attempt >= maxAttempts {
+				c.kill()
+				return nil, fmt.Errorf("gmodbus: unit %d function %#02x after %d attempt(s): %w",
+					unit, req.Function(), attempt, lastErr)
+			}
+			continue
+		}
+
+		// Reconnection is enabled. A bad TLS configuration cannot be fixed by a
+		// fresh connection, so do not spend the remaining budget on it.
+		if isTLSConfigError(lastErr) {
+			c.kill()
+			return nil, fmt.Errorf("%w: unit %d function %#02x: %w",
+				ErrClosed, unit, req.Function(), lastErr)
+		}
+		if reconnectBudget == 0 {
+			c.kill()
+			return nil, fmt.Errorf("%w: unit %d function %#02x after %d attempt(s): %w",
+				ErrClosed, unit, req.Function(), attempt, lastErr)
+		}
+		if err := c.reconnect(ctx, &reconnectBudget, lastErr); err != nil {
+			c.kill()
+			switch {
+			case errors.Is(err, ErrClosed):
+				return nil, ErrClosed
+			case ctx.Err() != nil:
+				return nil, ctx.Err()
+			default:
+				return nil, fmt.Errorf("%w: unit %d function %#02x after %d attempt(s): %w",
+					ErrClosed, unit, req.Function(), attempt, err)
+			}
+		}
+		// A live connection is back: retry the in-flight request with the same
+		// transaction id.
 	}
-	return nil, fmt.Errorf("gmodbus: unit %d function %#02x after %d attempt(s): %w",
-		unit, req.Function(), attempts, lastErr)
 }
 
 // once performs one attempt on a live connection. It returns the decoded
@@ -446,20 +565,29 @@ func (c *Client) connection(ctx context.Context) (net.Conn, *bufio.Reader, error
 	c.mu.Unlock()
 
 	// Only one exchange runs at a time, so only one goroutine dials here.
-	conn, err := dialTCP(ctx, c.addr, c.dialTimeout)
+	conn, err := c.dial(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	r := bufio.NewReader(conn)
+	r, err := c.install(conn)
+	if err != nil {
+		return nil, nil, err
+	}
+	return conn, r, nil
+}
 
+// install makes conn the live connection unless the client was closed while the
+// dial was in flight.
+func (c *Client) install(conn net.Conn) (*bufio.Reader, error) {
+	r := bufio.NewReader(conn)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
 		_ = conn.Close()
-		return nil, nil, ErrClosed
+		return nil, ErrClosed
 	}
 	c.conn, c.r = conn, r
-	return conn, r, nil
+	return r, nil
 }
 
 // classify maps an exchange error to an outcome.
@@ -506,21 +634,11 @@ func (c *Client) kill() {
 	conn := c.conn
 	c.conn, c.r = nil, nil
 	c.closed = true
+	c.closeCancel()
 	c.mu.Unlock()
 	if conn != nil {
 		_ = conn.Close()
 	}
-}
-
-// dialTCP connects and keeps the address in the error, so the caller sees which
-// server failed.
-func dialTCP(ctx context.Context, addr string, timeout time.Duration) (net.Conn, error) {
-	d := &net.Dialer{Timeout: timeout}
-	conn, err := d.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return nil, fmt.Errorf("gmodbus: dial %s: %w", addr, err)
-	}
-	return conn, nil
 }
 
 // writeAll writes the whole frame. A stream write may be short, and the

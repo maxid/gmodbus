@@ -11,13 +11,24 @@ import (
 // callers test them with errors.Is.
 var (
 	// ErrClosed is returned when the client has no connection: Close was called,
-	// or an exchange ran out of attempts and dropped the connection.
+	// or an exchange ran out of attempts and dropped the connection. With a
+	// Reconnect policy it is the result when the policy gives up, not merely when
+	// one attempt failed.
 	ErrClosed = errors.New("gmodbus: client is closed")
 	// ErrTimeout is returned when every attempt timed out without a response.
 	ErrTimeout = errors.New("gmodbus: request timed out")
 	// ErrTransactionMismatch is returned when a response carries a different
 	// transaction id or unit id than the request it claims to answer.
 	ErrTransactionMismatch = errors.New("gmodbus: response does not match the request")
+	// ErrTLSConfig is wrapped by a TLS handshake failure that a retry cannot
+	// fix: a certificate that does not verify (unknown authority, expired,
+	// wrong host name) or a peer that does not speak TLS. Dial returns it, and a
+	// reconnect gives up on it instead of spending its attempt budget.
+	ErrTLSConfig = errors.New("gmodbus: TLS configuration error")
+	// ErrTLSHandshake is wrapped by a TLS handshake failure that may clear on a
+	// fresh connection: a timeout, a reset or an early EOF. A reconnect may
+	// retry it.
+	ErrTLSHandshake = errors.New("gmodbus: TLS handshake failed")
 )
 
 // Error is a Modbus exception response mapped to an error.
