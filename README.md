@@ -1,3 +1,5 @@
+English | [简体中文](README.zh-CN.md)
+
 # gmodbus
 
 A **Modbus TCP master** for Go, built on the typed Modbus codec in
