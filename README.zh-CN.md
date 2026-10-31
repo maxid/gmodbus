@@ -63,6 +63,16 @@ if err := cli.WriteSingleCoil(ctx, 1, 0x0010, true); err != nil {
 }
 ```
 
+## 示例
+
+[`examples/read-holding`](examples/read-holding/main.go) 从 `-addr` 指定的设备读取保持寄存器并打印。
+没有默认主机，因此在没有可达设备时示例会带着传输错误以非零状态退出，而不是 panic：
+
+```sh
+go run ./examples/read-holding -addr 192.0.2.10:502
+go run ./examples/read-holding -addr 127.0.0.1:5020 -unit 1 -start 0 -quantity 4
+```
+
 ## 异常
 
 拒绝请求的服务端会以异常响应作答。客户端将其映射为

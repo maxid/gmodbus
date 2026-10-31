@@ -63,6 +63,18 @@ if err := cli.WriteSingleCoil(ctx, 1, 0x0010, true); err != nil {
 }
 ```
 
+## Examples
+
+[`examples/read-holding`](examples/read-holding/main.go) reads holding registers
+from the device given by `-addr` and prints them. There is no default host, so
+without a reachable device the example exits non-zero with the transport error
+instead of panicking:
+
+```sh
+go run ./examples/read-holding -addr 192.0.2.10:502
+go run ./examples/read-holding -addr 127.0.0.1:5020 -unit 1 -start 0 -quantity 4
+```
+
 ## Exceptions
 
 A server that rejects a request answers with an exception response. The client
