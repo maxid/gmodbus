@@ -2,36 +2,29 @@
 
 # gmodbus
 
-Go 的 **Modbus TCP master**，构建在
-[gnety](https://github.com/maxid/gnety) 的类型化 Modbus 编解码器
-（`codec/modbus`）之上。
+Go 的 **Modbus 客户端与服务端**，线格式来自 [gnety](https://github.com/maxid/gnety)
+的类型化 Modbus codec（`codec/modbus`）。
 
-> 状态：**开发快照（未打标签）** — `0.0.0-dev`。线格式
-> 来自编解码器；本库拥有连接、事务、
-> 重试、异常映射与轮询调度。
+> 状态：**开发快照（未打标签）** — `0.0.0-dev`。线格式在 codec；本库负责连接、事务、
+> 重试、异常码映射、轮询调度与服务端分发。
 
 ## 特性
 
-- 每个客户端一条 TCP 连接，为平台使用的功能码提供类型化操作：
-  读线圈、离散输入、保持寄存器与输入寄存器；写单个与多个
-  线圈及寄存器。
-- 自动的事务 id 与严格匹配：事务 id
-  或 unit id 与请求不匹配的响应会被拒绝。
-- `Timeout` 限制每次尝试，`Retries` 限制超时与传输层重试，
-  而 Modbus 异常响应是一个已送达的答案：它变为类型化的
-  `*gmodbus.Error`，且永远不会被重试。
-- 可选的自动重连：在传输层故障或对端关闭连接之后，
-  客户端以有界、带抖动的指数退避重新拨号，并重试在途请求。
-  没有该策略时保持快速失败的 `ErrClosed` 行为。
-- 可插拔传输：TLS（握手受 `DialTimeout` 约束），或自定义
-  `Dialer`，用于 TLS、代理、测试替身或任何其他 `net.Conn`
-  来源。
-- 每个客户端同时只有一个在途请求。并发调用方在链路上串行化，
-  并等待当前交换完成或等待自己的 context。
-- 低基数指标钩子（仅功能码与结果），并带有 nil 钩子的
-  快速路径。
-- 轮询运行器，让各独立任务按自己的调度运行，
-  并上报其错误而不中断。
+- **七种传输**：TCP、TLS over TCP、UDP、DTLS、串口 RTU、RTU over TCP、RTU over UDP，
+  客户端与服务端都覆盖。
+- **类型化客户端**：功能码 0x01/0x02/0x03/0x04/0x05/0x06/0x0F/0x10，以及 0x16、
+  0x17、0x2B/0x0E。
+- **自带寄存器区的服务端**：线圈、离散输入、保持寄存器、输入寄存器按 unit 独立保存；
+  `Handler` 可接管任意请求。
+- **厂商功能码**：类型化注册表可解码非标功能码，也可替换标准功能码的载荷，无需改库。
+- 自动事务号与严格匹配；不回答本请求的响应会被拒绝。
+- `Timeout` 约束单次尝试，`Retries` 约束超时/传输失败后的重试；Modbus 异常响应是
+  “已送达的答案”，映射成 `*gmodbus.Error`，永不重试。
+- 可选自动重连：有界、带抖动的指数退避。
+- RTU 默认 CRC16；RTU over TCP/UDP 可对去 CRC 的网关关闭校验，串口始终保留 CRC。
+- RTU 广播（unit 0）：写生效且不回包；读被拒绝。
+- 低基数客户端/服务端指标钩子，nil 时零成本。
+- 独立调度的轮询运行器。
 
 ## 安装
 
@@ -39,13 +32,13 @@ Go 的 **Modbus TCP master**，构建在
 go get github.com/maxid/gmodbus@<commit>
 ```
 
-开发期间不发布标签；请使用 commit 伪版本（pseudo-version）。
+开发期不打 tag，使用 commit 伪版本。
 
 ## 快速开始
 
 ```go
-cli, err := gmodbus.Dial(ctx, gmodbus.Config{
-    Addr:    "10.0.0.5:502",
+cli, err := gmodbus.NewClient(ctx, gmodbus.ClientConfig{
+    Addr:    "10.0.0.5:502", // Network 零值即 NetworkTCP
     Timeout: time.Second,
     Retries: 2,
 })
@@ -63,197 +56,261 @@ if err := cli.WriteSingleCoil(ctx, 1, 0x0010, true); err != nil {
 }
 ```
 
-## 示例
-
-[`examples/read-holding`](examples/read-holding/main.go) 从 `-addr` 指定的设备读取保持寄存器并打印。
-没有默认主机，因此在没有可达设备时示例会带着传输错误以非零状态退出，而不是 panic：
-
-```sh
-go run ./examples/read-holding -addr 192.0.2.10:502
-go run ./examples/read-holding -addr 127.0.0.1:5020 -unit 1 -start 0 -quantity 4
-```
-
-## 异常
-
-拒绝请求的服务端会以异常响应作答。客户端将其映射为
-`*gmodbus.Error`，其中携带 unit id、请求功能
-码与异常码，并可解包到编解码器的
-`modbus.ErrException`：
+服务端只需一次调用：
 
 ```go
-_, err := cli.ReadHoldingRegisters(ctx, 1, 0x9000, 1)
-var rejected *gmodbus.Error
-switch {
-case errors.As(err, &rejected):
-    // rejected.Code is modbus.ExceptionIllegalDataAddress here
-case errors.Is(err, modbus.ErrException):
-    // any exception code
-}
-```
-
-## 轮询
-
-```go
-tasks := []gmodbus.Task{
-    {
-        Name:  "temperature",
-        Every: time.Second,
-        Do: func(ctx context.Context) error {
-            values, err := cli.ReadInputRegisters(ctx, 1, 0x0000, 1)
-            if err != nil {
-                return err
-            }
-            latest.Store(values[0])
-            return nil
-        },
-    },
-    {
-        Name:  "setpoint",
-        Every: 5 * time.Second,
-        Do: func(ctx context.Context) error {
-            return cli.WriteSingleRegister(ctx, 1, 0x0010, want.Load())
-        },
-    },
-}
-
-err := cli.Poll(ctx, tasks, func(task gmodbus.Task, err error) {
-    log.Printf("poll %s: %v", task.Name, err)
+srv, err := gmodbus.NewServer(ctx, gmodbus.ServerConfig{
+    Addr: "127.0.0.1:5020",
+    Device: &gmodbus.DeviceIdentification{VendorName: "ACME", ProductCode: "PLC-1"},
 })
+if err != nil {
+    return err
+}
+defer srv.Close()
 ```
 
-`Poll` 会校验任务，立即运行每个任务，之后每隔 `Every` 运行一次
-（在各自的 goroutine 上，绝不与自身重叠），通过回调
-上报失败，并且只在 context 结束时返回。单个失败的任务绝不会
-停止循环或其他任务。任务名必须非空且唯一，`Every`
-不得短于 `MinTaskInterval`（10ms）。
+`NewServer` 立即开始服务；`Addr()` 返回实际监听地址（串口返回设备路径），测试可用
+`127.0.0.1:0`。
 
-长期运行的轮询器应设置 `Reconnect`，这样丢失的连接会
-就地恢复，而不是让之后每个任务都以 `ErrClosed` 失败：
+## 传输
 
-```go
-cli, err := gmodbus.Dial(ctx, gmodbus.Config{
-    Addr: "10.0.0.5:502",
-    Reconnect: &gmodbus.ReconnectPolicy{
-        Delay:       100 * time.Millisecond,
-        MaxDelay:    5 * time.Second,
-        MaxAttempts: 5,
-    },
-})
-```
+`Network` 选择传输，零值是 `NetworkTCP`。
 
-## 行为
+| 传输 | 常量 | 分帧 | 客户端选项 | 服务端选项 |
+| --- | --- | --- | --- | --- |
+| `tcp` | `NetworkTCP` | MBAP over TCP | `Addr` | `Addr`、`Listener` |
+| `tls` | `NetworkTLS` | MBAP over TLS | `TLS`（可选） | `TLS`（`Listener` 已终结 TLS 时可不填） |
+| `udp` | `NetworkUDP` | 每个数据报一个 MBAP 帧 | `Addr` | `Addr`、`PacketConn` |
+| `dtls` | `NetworkDTLS` | 每条 DTLS 记录一个 MBAP 帧 | `DTLS`（必填） | `DTLS`（`Listener` 已终结 DTLS 时可不填） |
+| `rtu` | `NetworkRTU` | 串口上的 CRC16 RTU 帧；`Addr` 是设备路径 | `Addr` 或 `Port`、`Serial` | `Addr` 或 `Port`、`Serial` |
+| `rtu-tcp` | `NetworkRTUOverTCP` | RTU 帧 over TCP | `Addr`、`RTU` | `Addr`、`Listener`、`RTU` |
+| `rtu-udp` | `NetworkRTUOverUDP` | 每个数据报一个 RTU 帧 | `Addr`、`RTU` | `Addr`、`PacketConn`、`RTU` |
+
+`ClientConfig.TLS` 为零时使用系统根证书，并从 `Addr` 推导 `ServerName`；
+`ClientConfig.DTLS` 必填，`ServerName` 为空时同样从 `Addr` 推导。服务端的 TLS/DTLS
+配置按传入值使用，所有权归调用方。
+
+`RTU` 控制 RTU 分帧变体：零值写入并校验 CRC；`modbus.RTUOptions{NoCRC: true}` 在
+`rtu-tcp`/`rtu-udp` 上去掉校验。串口上拒绝 `NoCRC`，规范要求保留校验和。
+
+## 客户端
 
 ### 配置
 
 | 字段 | 含义 | 零值 |
 | --- | --- | --- |
-| `Addr` | 服务端地址，`host:port` | 必填 |
-| `DialTimeout` | 一次 TCP 连接的上限 | `DefaultDialTimeout`（5s） |
-| `Timeout` | 一次尝试的上限，写加读 | `DefaultTimeout`（5s） |
-| `Retries` | 首次之后的额外尝试次数，仅限超时/传输层 | 只尝试一次 |
+| `Network` | 传输 | `NetworkTCP` |
+| `Addr` | `host:port` 或串口设备路径 | 必填（`Port` 例外） |
+| `DialTimeout` | 单次连接、TLS/DTLS 握手或串口打开的界限 | `DefaultDialTimeout`（5s） |
+| `Timeout` | 单次尝试（写+读）的界限 | `DefaultTimeout`（5s） |
+| `Retries` | 首次之外的额外尝试，仅超时/传输失败 | 一次尝试 |
 | `MaxPDU` | 入站 PDU 上限 | `modbus.MaxPDU` |
-| `Metrics` | 每次尝试的钩子 | 无，且不产生任何开销 |
-| `Reconnect` | 可选启用的恢复策略：延迟、最大延迟与拨号预算 | nil，快速失败 |
-| `TLS` | 内置拨号器的 TLS 配置 | 明文 TCP |
-| `Dialer` | 自定义传输拨号器，优先于 `TLS` | 内置 TCP 拨号器 |
+| `Metrics` | 每次尝试的钩子 | 无，且零成本 |
+| `Reconnect` | 可选自动恢复策略 | nil，快速失败 |
+| `TLS` | `tls` 的 TLS 配置 | 系统根证书 |
+| `DTLS` | `dtls` 的 DTLS 配置 | `dtls` 必填 |
+| `Serial` | `rtu` 的串口参数 | 19200、8 数据位、1 停止位、无校验 |
+| `RTU` | `rtu-tcp`/`rtu-udp` 的 RTU 变体 | 带 CRC |
+| `Functions` | 厂商功能码注册表 | 仅内置功能码 |
+| `Port` | 已打开的串口（`rtu`） | 用 `Addr` 和 `Serial` 打开 |
 
-负的时长、负的 `Retries`、负的重连字段、
-重连 `MaxDelay` 小于 `Delay`，以及 `MaxPDU` 大于 `modbus.MaxPDU`，
-都会被 `Dial` 拒绝。
+`SerialConfig` 包含 `Baud`、`DataBits`、`StopBits`、`Parity`，零值取默认。传入的
+`Port` 自行管理线路参数，必须支持 `SetDeadline`，并由 `Client.Close` 关闭。
+
+### 操作
+
+| 功能码 | 方法 | 结果 |
+| --- | --- | --- |
+| 0x01 读线圈 | `ReadCoils` | `[]bool` |
+| 0x02 读离散输入 | `ReadDiscreteInputs` | `[]bool` |
+| 0x03 读保持寄存器 | `ReadHoldingRegisters` | `[]uint16` |
+| 0x04 读输入寄存器 | `ReadInputRegisters` | `[]uint16` |
+| 0x05 写单线圈 | `WriteSingleCoil` | error |
+| 0x06 写单寄存器 | `WriteSingleRegister` | error |
+| 0x0F 写多线圈 | `WriteMultipleCoils` | error |
+| 0x10 写多寄存器 | `WriteMultipleRegisters` | error |
+| 0x16 掩码写寄存器 | `MaskWriteRegister` | error |
+| 0x17 读写多寄存器 | `ReadWriteMultipleRegisters` | `[]uint16` |
+| 0x2B/0x0E 读设备标识 | `ReadDeviceIdentification` | `*modbus.ReadDeviceIdentificationResponse` |
+| 任意已注册消息 | `Execute(ctx, unit, req)` | `modbus.Message` |
+
+0x17 先写后读且只占一个事务。设备标识响应可能带 `MoreFollows`/`NextObjectID`，调用方
+用该对象 ID 再发一次请求继续读取。
+
+### 厂商功能码
+
+`ClientConfig.Functions` 与 `ServerConfig.Functions` 共用 gnety 的注册表：
+
+```go
+functions := modbus.Functions{
+    0x64: {
+        DecodeRequest:  func(pdu []byte) (modbus.Message, error) { ... },
+        DecodeResponse: func(req modbus.Message, pdu []byte) (modbus.Message, error) { ... },
+        // 仅 RTU 串口 / RTU over TCP 需要（没有长度字段）。
+        RequestLength:  func(frame []byte) (int, error) { ... },
+        ResponseLength: func(req modbus.Message, frame []byte) (int, error) { ... },
+    },
+}
+cli, _ := gmodbus.NewClient(ctx, gmodbus.ClientConfig{Addr: "10.0.0.5:502", Functions: functions})
+resp, err := cli.Execute(ctx, 1, &myVendorRequest{...})
+```
+
+注册表先于内置解码器工作，因此也能替换标准功能码的载荷。异常响应始终由内置解码器处理，
+厂商请求同样能正确收到异常。
+
+### RTU 广播
+
+`rtu`、`rtu-tcp`、`rtu-udp` 上 unit 0 是广播：写方法发送后立即返回，服务端生效但不回包；
+对 unit 0 的读返回错误。MBAP 传输上 unit 0 是普通 unit。
+
+## 服务端
+
+```go
+store := gmodbus.NewMemoryStore(nil) // unit 1，每区 1024 点
+unit := store.AddUnit(7, gmodbus.UnitConfig{HoldingRegisters: 256})
+
+srv, err := gmodbus.NewServer(ctx, gmodbus.ServerConfig{
+    Network: gmodbus.NetworkTCP,
+    Addr:    ":502",
+    Store:   store,
+    Handler: gmodbus.HandlerFunc(func(ctx context.Context, unit uint8, req modbus.Message) (modbus.Message, error) {
+        return nil, gmodbus.ErrUnhandled // 交给内置寄存器区
+    }),
+    Device: &gmodbus.DeviceIdentification{VendorName: "ACME", ProductCode: "PLC-1", MajorMinorRevision: "1.2"},
+})
+```
+
+`NewServer` 绑定传输并开始服务。`Close` 停止监听、关闭所有连接和串口；传给 `NewServer`
+的 context 取消时同样关闭。
+
+### 分发顺序
+
+1. `Handler` 优先。返回响应就发送；返回 `*modbus.Exception`（错误或消息）就发送该异常；
+   返回 `ErrUnhandled` 落到寄存器区；其他错误经 `OnError` 上报并回 `ServerDeviceFailure`。
+2. `MemoryStore` 应答标准功能码；越界地址回 `IllegalDataAddress`；未知功能码返回
+   `ErrUnhandled`。
+3. `DeviceIdentification` 在 Handler 与 Store 都未处理 0x2B/0x0E 时代答。
+4. 仍未处理则回 `IllegalFunction`。
+
+Handler 的 panic 会被捕获、经 `OnError` 上报，并回 `ServerDeviceFailure`。
+
+### MemoryStore
+
+- 每个 unit 独立四区，地址都从 0 开始。
+- `UnitConfig` 配置各区大小，零字段取 `DefaultUnitSize`（1024）。请求一个尚不存在的
+  unit 时会按默认配置懒创建，因此任意 unit 都可用。
+- `UnitStore` 提供 `Coils`/`SetCoils`/`Coil`/`SetCoil`、`HoldingRegisters`/
+  `SetHoldingRegisters`、`MaskWrite`、`ReadWrite`，离散输入与输入寄存器同理。
+- `OnWrite` 在写成功后回调（值已复制），在锁外执行；广播会为每个 unit 各报告一次。
+- 0x17 在同一把 unit 锁内完成写与读，符合该功能码的原子语义。
+
+### 服务端配置
+
+| 字段 | 含义 | 零值 |
+| --- | --- | --- |
+| `Network`、`Addr` | 传输与地址 | `NetworkTCP`；未提供 socket/Port 时地址必填 |
+| `TLS`、`DTLS` | 安全配置 | `tls`/`dtls` 必填，除非 `Listener` 已终结安全层 |
+| `Listener`、`PacketConn` | 已打开的 socket | nil；服务端负责关闭 |
+| `Serial`、`Port`、`RTU` | 串口与 RTU 变体 | 与客户端相同 |
+| `Handler`、`Store`、`Device` | 分发栈 | 无 Handler；默认寄存器区；无设备标识 |
+| `Functions` | 厂商功能码注册表 | 仅内置功能码 |
+| `MaxPDU` | 入站 PDU 上限 | `modbus.MaxPDU` |
+| `MaxConnections` | 并发流连接/数据报 peer 上限 | 不限 |
+| `IdleTimeout` | 关闭空闲流连接；遗忘空闲数据报 peer | 关闭 |
+| `ShutdownTimeout` | `Close` 的界限 | `DefaultShutdownTimeout`（5s） |
+| `Metrics` | 每请求钩子 | 无，且零成本 |
+| `OnError` | 传输与 Handler 错误 | 丢弃 |
+
+## 行为
 
 ### 事务与重试
 
-每个操作都从每客户端计数器取下一个事务 id
-（容忍回绕），写入帧，并通过编解码器按其必须应答的请求
-读取回复。事务 id 或 unit
-id 不同的回复即为 `ErrTransactionMismatch`。
+每次 MBAP 操作取下一个事务号（容忍回绕），事务号或 unit 不匹配的响应被拒绝；RTU 没有
+事务号，响应必须匹配 unit 和功能码，CRC 负责拒绝损坏帧。以上都返回
+`ErrResponseMismatch`。
 
 一次尝试要么得到答案，要么失败：
 
-- **ok** — 响应被解码并返回。
-- **exception** — 一个 `*gmodbus.Error`；连接保持可用，且不会
-  发生重试。
-- **timeout** — 在 `Timeout` 内没有完整响应。
-- **transport** — 连接失败（被拒绝、被重置、被关闭，或编解码器
-  拒绝了帧）。
-- **mismatch** — 回复没有应答此请求。
+- **ok**：解码并返回响应。
+- **exception**：`*gmodbus.Error`；连接可继续用，不重试。
+- **timeout**：`Timeout` 内没有完整响应。
+- **transport**：连接失败（拒绝、重置、关闭，或 codec 拒绝的帧）。
+- **mismatch**：响应不回答本请求。
 
-超时或传输层故障会终止该次尝试的连接，因此重试会拨一条
-新连接。在没有 `Reconnect` 时、尝试次数耗尽时，或回复
-不可用（不匹配，或编解码器拒绝的帧）时，客户端会永久关闭
-其连接：之后每次调用都以 `ErrClosed` 快速失败，而不是
-在一条可能仍携带过期回复的流上显得健康。请拨号一个新
-客户端来恢复。
+超时或传输失败会结束该次连接的寿命，重试会重新连接。没有 `Reconnect` 时，尝试耗尽或
+响应不可用会把客户端彻底关闭，之后快速失败 `ErrClosed`；重新建客户端恢复。数据报传输
+会忽略上一笔的迟到响应，继续等自己的。
 
 ### 重连
 
-设置 `Reconnect` 可将传输层故障或对端关闭的连接
-转为就地恢复。客户端丢弃损坏的连接，并以带抖动的指数退避
-重新拨号：第一次重拨使用 `Delay`，每次尝试翻倍
-并以 `MaxDelay` 为上限。`MaxAttempts` 限制单个
-操作可消耗的拨号次数。一旦重拨成功，在途请求会
-以相同的事务 id 重试，因此轮询器可以挺过短暂中断而
-不看到错误。
+设置 `Reconnect` 后，传输失败或被对端关闭的连接会在原地恢复：丢弃坏连接，按有抖动的
+指数退避重拨（`Delay` 起步、逐次翻倍、`MaxDelay` 封顶），`MaxAttempts` 限制单次操作
+的重拨次数；成功后重试在途请求。串口按同样方式重开。
 
-整个序列都在调用方的 context 内运行，并占用唯一的
-交换槽位，因此不会新增 goroutine，也不会并行拨号。`Close` 会
-立即中断退避等待或拨号。预算耗尽时客户端上报
-`ErrClosed` 并保持关闭；`Close` 显式做同样的事。`Retries` 仍然
-限制超时：超时不会启动重连，但在有 `Reconnect`
-策略时，超时尝试耗尽的客户端对下一次调用仍然可用。
+整个过程在调用方 context 内、占用单一交换槽；`Close` 立即打断退避或连接。永久 TLS/DTLS
+配置错误（`ErrTLSConfig`）直接结束，不消耗预算。
 
-### TLS 与自定义拨号器
+### TLS 与 DTLS
 
-`TLS` 包装内置的 TCP 连接，并在
-`DialTimeout` 内完成握手。当重试无济于事时（证书
-校验、对端不提供 TLS、TLS alert），握手失败会包装
-`ErrTLSConfig`；当失败是暂时性的（超时、重置、提前
-EOF）时包装 `ErrTLSHandshake`。重连不会在 `ErrTLSConfig` 上
-消耗尝试次数。
-
-`Dialer` 优先于 `TLS`：设置之后它拥有整个传输，
-接收 `"tcp"` 与 `Addr`，并可用
-`tls.DialWithDialer` 或 `tls.Client` 自行完成 TLS。允许同时提供 `TLS` 配置
-与自定义拨号器，而 `TLS` 配置并不会被使用。`Dialer` 必须遵守其 context；`Close`
-会取消它。
+客户端在 `DialTimeout` 内完成握手；服务端按传入的 `*tls.Config`/`*dtls.Config` 使用。
+证书校验失败、对端不说该协议或安全告警会包装 `ErrTLSConfig`，重连不会重试；瞬时握手失败
+（EOF、重置、超时）按普通传输失败重试。
 
 ### 错误
 
 | 错误 | 含义 |
 | --- | --- |
-| `ErrClosed` | 客户端没有连接：已关闭，或尝试次数耗尽 |
-| `ErrTimeout` | 每次尝试都超时 |
-| `ErrTransactionMismatch` | 回复未应答该请求 |
-| `ErrTLSConfig` | 永久性的 TLS 握手失败；重试无法修复 |
-| `ErrTLSHandshake` | 暂时性的 TLS 握手失败；重连可以重试 |
-| `*gmodbus.Error` | Modbus 异常响应；可解包为 `modbus.ErrException` |
+| `ErrClosed` | 客户端没有连接：已关闭或尝试耗尽 |
+| `ErrTimeout` | 所有尝试都超时 |
+| `ErrResponseMismatch` | 响应不回答本请求 |
+| `ErrTLSConfig` | 永久 TLS/DTLS 握手失败，重试无益 |
+| `ErrServerClosed` | 服务端关闭后的操作 |
+| `ErrUnhandled` | Handler 不接受该请求，回落寄存器区 |
+| `ErrOutOfRange` | 寄存器区地址/数量越界 |
+| `*gmodbus.Error` | Modbus 异常响应；可 unwrap 到 `modbus.ErrException` |
 
-哨兵错误是被包装的，因此用 `errors.Is` 判断；用 `errors.As`
-取出类型化异常。取消调用方的 context 会以 `ctx.Err()` 中止挂起的
-交换并关闭连接，因为被放弃的回复否则会在之后的某个请求
-期间到达。
+sentinel 都是包装返回，用 `errors.Is` 判断；异常用 `errors.As` 取出。取消调用方 context
+会中止在途交换并返回 `ctx.Err()`，连接随之关闭。
 
 ### 并发
 
-客户端可安全并发使用，但只保持一个在途请求：每次
-调用都占用同一个槽位，第二个调用方会等待当前交换或
-其自身 context，先到者为准。Modbus TCP 在此没有乱序
-保证，因此重叠交换被有意设为不可能。
+客户端可并发使用，但同一时刻只有一个请求在途：所有调用竞争同一个槽，后到的等待当前交换
+或自己的 context。服务端每条流连接顺序处理请求；数据报传输经 gnety session 独立处理每个
+报文。
 
 ### 指标
 
-`Metrics.Request(function, result, duration)` 每次尝试运行一次，在
-调用方的 goroutine 上。`result` 为 `ResultOK`、`ResultException`、
-`ResultTimeout`、`ResultTransport` 或 `ResultMismatch` 之一；编解码器拒绝的帧
-报告为 `ResultTransport`，因为连接被丢弃。按设计没有
-unit、地址或值的标签。
+`Metrics.Request(function, result, duration)` 每次客户端尝试在调用方 goroutine 上调用
+一次，`result` 为 `ResultOK`/`ResultException`/`ResultTimeout`/`ResultTransport`/
+`ResultMismatch`。codec 拒绝的帧记为 `ResultTransport`，因为连接会被丢弃。
+
+`ServerMetrics.Request(function, result, duration)` 每个服务端请求调用一次，`result` 为
+`ServerResultOK`/`ServerResultException`/`ServerResultError`。两个钩子都不带 unit、地址
+或值，保持低基数。
+
+## 示例
+
+[`examples/read-holding`](examples/read-holding/main.go) 按 `-network` 与 `-addr` 读取
+保持寄存器：
+
+```sh
+go run ./examples/read-holding -addr 192.0.2.10:502
+go run ./examples/read-holding -network rtu-tcp -addr 127.0.0.1:5020 -unit 1 -start 0 -quantity 4
+```
+
+[`examples/server`](examples/server/main.go) 启动一个带初始寄存器区的 Modbus TCP 服务端，
+并打印每次写入：
+
+```sh
+go run ./examples/server -addr 127.0.0.1:5020
+go run ./examples/read-holding -addr 127.0.0.1:5020 -start 0 -quantity 4
+```
 
 ## 范围
 
-仅支持 Modbus **TCP master**。有意排除的范围：串口 RTU 分帧与
-串口参数、slave 与 server 角色、寄存器映射、设备模型以及
-命令行工具。MBAP 头与 PDU 编码位于
-`github.com/maxid/gnety/codec/modbus`，此处永不重新实现。
+覆盖客户端与服务端角色及上面的七种传输。明确不做：RS485 半双工回声消除、强制 RTU 3.5
+字符静默间隔、串口写超时（串口库没有该设置）、0x07/0x08/0x0B 功能码、寄存器映射/物模型
+与命令行工具。
 
 ## 文档
 
@@ -263,4 +320,4 @@ go doc -all .
 
 ## 许可证
 
-MIT。见 [LICENSE](LICENSE)。
+MIT，见 [LICENSE](LICENSE)。
