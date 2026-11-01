@@ -6,92 +6,155 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"net"
 	"time"
+
+	"github.com/maxid/gnety"
+	"github.com/pion/dtls/v2"
 )
 
-// dial opens one transport connection. A configured Dialer owns the transport
-// completely; otherwise a plain TCP connection is dialed and, when TLS is
-// configured, wrapped in a TLS client.
-func (c *Client) dial(ctx context.Context) (net.Conn, error) {
-	if c.isClosed() {
-		return nil, ErrClosed
+// open opens one transport connection and pairs it with the codec for its
+// framing. It is called from the single exchange slot, so it never races with
+// another open on the same client.
+func (c *Client) open(ctx context.Context) (*clientLink, error) {
+	switch c.network {
+	case NetworkTCP:
+		return c.openStream(ctx, "tcp", nil, false)
+	case NetworkTLS:
+		return c.openStream(ctx, "tcp-tls", c.tlsConfig, false)
+	case NetworkRTUOverTCP:
+		return c.openStream(ctx, "tcp", nil, true)
+	case NetworkUDP:
+		return c.openDatagram(ctx, "udp", nil, false)
+	case NetworkDTLS:
+		return c.openDatagram(ctx, "dtls", c.dtlsConfig, false)
+	case NetworkRTUOverUDP:
+		return c.openDatagram(ctx, "udp", nil, true)
+	case NetworkRTU:
+		return c.openSerial(ctx)
+	default:
+		return nil, fmt.Errorf("gmodbus: unsupported network %q", c.network)
 	}
-
-	// A Close during a dial cancels it even if the caller's context is still
-	// live. AfterFunc only starts a goroutine when closeCtx is actually done.
-	dialCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	stop := context.AfterFunc(c.closeCtx, cancel)
-	defer stop()
-
-	if c.dialer != nil {
-		conn, err := c.dialer(dialCtx, "tcp", c.addr)
-		if err != nil {
-			return nil, fmt.Errorf("gmodbus: dial %s: %w", c.addr, err)
-		}
-		if conn == nil {
-			return nil, fmt.Errorf("gmodbus: dial %s: custom Dialer returned a nil connection", c.addr)
-		}
-		return conn, nil
-	}
-
-	d := &net.Dialer{Timeout: c.dialTimeout}
-	conn, err := d.DialContext(dialCtx, "tcp", c.addr)
-	if err != nil {
-		return nil, fmt.Errorf("gmodbus: dial %s: %w", c.addr, err)
-	}
-	if c.tlsConfig == nil {
-		return conn, nil
-	}
-	return c.tlsDial(dialCtx, conn)
 }
 
-// tlsDial completes the TLS handshake within DialTimeout (or the caller's
-// earlier deadline) and classifies a failure so a reconnect can tell a bad
-// configuration from a transient outage.
-func (c *Client) tlsDial(parent context.Context, conn net.Conn) (net.Conn, error) {
+// openStream opens a TCP or TLS connection and installs the MBAP or RTU stream
+// codec.
+func (c *Client) openStream(ctx context.Context, network string, tlsCfg *tls.Config, rtuMode bool) (*clientLink, error) {
+	codec := &streamCodec{
+		rtuMode:   rtuMode,
+		rtu:       c.rtu,
+		functions: c.functions,
+		maxPDU:    c.maxPDU,
+	}
+	cfg := gnety.ClientConfig{
+		Network: network,
+		Addr:    c.addr,
+		Timeout: c.dialTimeout,
+		Codec:   codec,
+	}
+	if tlsCfg != nil {
+		cfg.TLSConfig = tlsCfg
+	}
+	dialCtx, cancel := c.connectContext(ctx)
+	defer cancel()
+	cli, err := gnety.Dial(dialCtx, cfg)
+	if err != nil {
+		return nil, c.classifyConnectError(err)
+	}
+	return &clientLink{cli: cli, codec: codec}, nil
+}
+
+// openDatagram opens a UDP or DTLS connection and installs the MBAP or RTU
+// datagram codec.
+func (c *Client) openDatagram(ctx context.Context, network string, dtlsCfg *dtls.Config, rtuMode bool) (*clientLink, error) {
+	codec := &datagramCodec{
+		rtuMode:   rtuMode,
+		rtu:       c.rtu,
+		functions: c.functions,
+		maxPDU:    c.maxPDU,
+	}
+	cfg := gnety.ClientConfig{
+		Network:       network,
+		Addr:          c.addr,
+		Timeout:       c.dialTimeout,
+		DatagramCodec: codec,
+	}
+	if dtlsCfg != nil {
+		cfg.DTLSConfig = dtlsCfg
+	}
+	dialCtx, cancel := c.connectContext(ctx)
+	defer cancel()
+	cli, err := gnety.Dial(dialCtx, cfg)
+	if err != nil {
+		return nil, c.classifyConnectError(err)
+	}
+	return &clientLink{cli: cli, codec: codec}, nil
+}
+
+// openSerial opens the serial line and wraps it as a gnety client. Serial is the
+// one transport gnety does not open itself; the custom-socket entry point keeps
+// the codec and read/write path identical to the network transports.
+func (c *Client) openSerial(ctx context.Context) (*clientLink, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	port, err := c.openPort()
+	if err != nil {
+		return nil, err
+	}
+	codec := &streamCodec{
+		rtuMode:   true,
+		rtu:       c.rtu,
+		functions: c.functions,
+		maxPDU:    c.maxPDU,
+	}
+	cli, err := gnety.NewClient(newPortConn(port, c.addr), gnety.ClientConfig{
+		Network: "tcp",
+		Addr:    c.addr,
+		Codec:   codec,
+	})
+	if err != nil {
+		_ = port.Close()
+		return nil, err
+	}
+	return &clientLink{cli: cli, codec: codec}, nil
+}
+
+// openPort returns the caller-supplied port or opens the configured serial
+// device.
+func (c *Client) openPort() (Port, error) {
+	if c.port != nil {
+		return c.port, nil
+	}
+	return openSerialPort(c.addr, c.serial)
+}
+
+// connectContext bounds one connect by DialTimeout or the caller's earlier
+// deadline.
+func (c *Client) connectContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	deadline := time.Now().Add(c.dialTimeout)
-	if d, ok := parent.Deadline(); ok && d.Before(deadline) {
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
 	}
-	handshakeCtx, cancel := context.WithDeadline(parent, deadline)
-	defer cancel()
-
-	// HandshakeContext honors cancellation, but the underlying connection also
-	// gets the deadline so a peer that stops reading cannot hold it open.
-	if err := conn.SetDeadline(deadline); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("%w: dial %s: TLS deadline: %w", ErrTLSHandshake, c.addr, err)
-	}
-	tlsConn := tls.Client(conn, c.tlsConfig)
-	err := tlsConn.HandshakeContext(handshakeCtx)
-	if err == nil {
-		err = conn.SetDeadline(time.Time{})
-	}
-	if err != nil {
-		_ = conn.Close()
-		if parent.Err() != nil {
-			return nil, parent.Err()
-		}
-		return nil, classifyTLSHandshake(c.addr, err)
-	}
-	return tlsConn, nil
+	return context.WithDeadline(ctx, deadline)
 }
 
-// classifyTLSHandshake wraps a failed handshake with the sentinel that says
-// whether a retry can help.
-func classifyTLSHandshake(addr string, err error) error {
-	permanent := tlsErrorIsPermanent(err)
-	if permanent {
-		return fmt.Errorf("%w: dial %s: TLS handshake: %w", ErrTLSConfig, addr, err)
+// classifyConnectError marks a permanent TLS/DTLS configuration failure so a
+// reconnect does not spend its attempt budget on it. Every other connect error
+// is transient by nature.
+func (c *Client) classifyConnectError(err error) error {
+	if err == nil {
+		return nil
 	}
-	return fmt.Errorf("%w: dial %s: TLS handshake: %w", ErrTLSHandshake, addr, err)
+	if isTLSConfigError(err) || !tlsErrorIsPermanent(err) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", ErrTLSConfig, err)
 }
 
 // tlsErrorIsPermanent reports whether a handshake failure is a configuration
 // problem that a fresh connection cannot fix: certificate verification, a peer
-// that does not speak TLS, or a TLS alert such as a protocol mismatch.
+// that does not speak TLS or DTLS, or a security alert such as a protocol
+// mismatch.
 func tlsErrorIsPermanent(err error) bool {
 	var (
 		unknownAuthority x509.UnknownAuthorityError
@@ -114,6 +177,6 @@ func tlsErrorIsPermanent(err error) bool {
 	}
 }
 
-// isTLSConfigError reports whether err is a permanent TLS configuration
+// isTLSConfigError reports whether err is a permanent TLS/DTLS configuration
 // failure, which reconnection must not retry.
 func isTLSConfigError(err error) bool { return errors.Is(err, ErrTLSConfig) }

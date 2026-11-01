@@ -55,7 +55,8 @@ func TestTLSConnection(t *testing.T) {
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS12,
 	})
-	cli := dialForTest(t, srv, func(cfg *Config) {
+	cli := dialForTest(t, srv, func(cfg *ClientConfig) {
+		cfg.Network = NetworkTLS
 		cfg.TLS = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 	})
 
@@ -78,7 +79,8 @@ func TestTLSReconnectsAfterDroppedConnection(t *testing.T) {
 		MinVersion:   tls.VersionTLS12,
 	})
 	srv.dropRequests(func(req fakeRequest) bool { return req.index == 0 })
-	cli := dialForTest(t, srv, func(cfg *Config) {
+	cli := dialForTest(t, srv, func(cfg *ClientConfig) {
+		cfg.Network = NetworkTLS
 		cfg.TLS = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 		cfg.Reconnect = &ReconnectPolicy{
 			Delay:       time.Millisecond,
@@ -107,22 +109,20 @@ func TestTLSConfigurationErrorIsClassified(t *testing.T) {
 	})
 
 	// An empty pool trusts no CA, so the self-signed certificate cannot verify.
-	_, err := Dial(context.Background(), Config{
-		Addr: srv.addr(),
-		TLS:  &tls.Config{RootCAs: x509.NewCertPool(), MinVersion: tls.VersionTLS12},
+	_, err := NewClient(context.Background(), ClientConfig{
+		Network: NetworkTLS,
+		Addr:    srv.addr(),
+		TLS:     &tls.Config{RootCAs: x509.NewCertPool(), MinVersion: tls.VersionTLS12},
 	})
 	if !errors.Is(err, ErrTLSConfig) {
-		t.Fatalf("Dial = %v, want ErrTLSConfig", err)
-	}
-	if errors.Is(err, ErrTLSHandshake) {
-		t.Errorf("Dial error %v is classified as transient as well", err)
+		t.Fatalf("NewClient = %v, want ErrTLSConfig", err)
 	}
 	if got := srv.count(); got != 0 {
 		t.Fatalf("server saw %d requests after a rejected handshake, want 0", got)
 	}
 }
 
-func TestTLSTransientFailureIsClassified(t *testing.T) {
+func TestTLSTransientFailureIsNotPermanent(t *testing.T) {
 	_, pool := testCertificate(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -140,16 +140,17 @@ func TestTLSTransientFailureIsClassified(t *testing.T) {
 		}
 	}()
 
-	_, err = Dial(context.Background(), Config{
+	_, err = NewClient(context.Background(), ClientConfig{
+		Network:     NetworkTLS,
 		Addr:        ln.Addr().String(),
 		DialTimeout: time.Second,
 		TLS:         &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
 	})
-	if !errors.Is(err, ErrTLSHandshake) {
-		t.Fatalf("Dial = %v, want ErrTLSHandshake", err)
+	if err == nil {
+		t.Fatal("NewClient succeeded")
 	}
 	if errors.Is(err, ErrTLSConfig) {
-		t.Errorf("Dial error %v is classified as permanent as well", err)
+		t.Errorf("NewClient error %v is classified as permanent", err)
 	}
 
 	// Close the peer that made the handshake fail and let the accept goroutine
@@ -178,14 +179,18 @@ func TestTLSHandshakeHonorsDialTimeout(t *testing.T) {
 	}()
 
 	start := time.Now()
-	_, err = Dial(context.Background(), Config{
+	_, err = NewClient(context.Background(), ClientConfig{
+		Network:     NetworkTLS,
 		Addr:        ln.Addr().String(),
 		DialTimeout: 50 * time.Millisecond,
 		TLS:         &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
 	})
 	elapsed := time.Since(start)
-	if !errors.Is(err, ErrTLSHandshake) {
-		t.Fatalf("Dial = %v, want ErrTLSHandshake", err)
+	if err == nil {
+		t.Fatal("NewClient succeeded")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !isTimeout(err) {
+		t.Fatalf("NewClient = %v, want a timeout", err)
 	}
 	if elapsed < 30*time.Millisecond {
 		t.Errorf("TLS handshake returned after %s, before the 50ms DialTimeout", elapsed)

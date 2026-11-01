@@ -52,13 +52,13 @@ func normalizeReconnect(p *ReconnectPolicy) (*ReconnectPolicy, error) {
 	}
 	out := *p
 	if out.Delay < 0 {
-		return nil, errors.New("gmodbus: Config.Reconnect.Delay is negative")
+		return nil, errors.New("gmodbus: ClientConfig.Reconnect.Delay is negative")
 	}
 	if out.MaxDelay < 0 {
-		return nil, errors.New("gmodbus: Config.Reconnect.MaxDelay is negative")
+		return nil, errors.New("gmodbus: ClientConfig.Reconnect.MaxDelay is negative")
 	}
 	if out.MaxAttempts < 0 {
-		return nil, errors.New("gmodbus: Config.Reconnect.MaxAttempts is negative")
+		return nil, errors.New("gmodbus: ClientConfig.Reconnect.MaxAttempts is negative")
 	}
 	if out.Delay == 0 {
 		out.Delay = DefaultReconnectDelay
@@ -70,7 +70,7 @@ func normalizeReconnect(p *ReconnectPolicy) (*ReconnectPolicy, error) {
 		}
 	}
 	if out.MaxDelay < out.Delay {
-		return nil, fmt.Errorf("gmodbus: Config.Reconnect.MaxDelay %s is below Delay %s", out.MaxDelay, out.Delay)
+		return nil, fmt.Errorf("gmodbus: ClientConfig.Reconnect.MaxDelay %s is below Delay %s", out.MaxDelay, out.Delay)
 	}
 	if out.MaxAttempts == 0 {
 		out.MaxAttempts = DefaultReconnectMaxAttempts
@@ -127,7 +127,7 @@ func (c *Client) reconnect(ctx context.Context, budget *int, last error) error {
 		}
 		*budget--
 
-		conn, err := c.dial(ctx)
+		link, err := c.open(ctx)
 		if err != nil {
 			if isTLSConfigError(err) {
 				return err
@@ -135,7 +135,7 @@ func (c *Client) reconnect(ctx context.Context, budget *int, last error) error {
 			last = err
 			continue
 		}
-		if _, err := c.install(conn); err != nil {
+		if err := c.install(link); err != nil {
 			return err
 		}
 		return nil

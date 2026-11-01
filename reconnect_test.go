@@ -41,7 +41,7 @@ func TestPeerDropWithoutReconnectFailsFast(t *testing.T) {
 func TestPeerDropWithReconnectRetriesTheRequest(t *testing.T) {
 	srv := newFakeServer(t)
 	srv.dropRequests(func(req fakeRequest) bool { return req.index == 1 })
-	cli := dialForTest(t, srv, func(cfg *Config) {
+	cli := dialForTest(t, srv, func(cfg *ClientConfig) {
 		// No ordinary retries: recovery comes from the reconnect policy alone.
 		cfg.Retries = 0
 		cfg.Reconnect = &ReconnectPolicy{
@@ -88,7 +88,7 @@ func TestPollSurvivesReconnect(t *testing.T) {
 	// The first connection serves one request and is then dropped; every later
 	// request runs on the replacement connection.
 	srv.dropRequests(func(req fakeRequest) bool { return req.conn == 1 && req.index >= 1 })
-	cli := dialForTest(t, srv, func(cfg *Config) {
+	cli := dialForTest(t, srv, func(cfg *ClientConfig) {
 		cfg.Reconnect = &ReconnectPolicy{
 			Delay:       time.Millisecond,
 			MaxDelay:    2 * time.Millisecond,
@@ -153,7 +153,7 @@ func TestTimeoutExhaustionKeepsClientUsableWithReconnect(t *testing.T) {
 		}
 		return cannedResponse(nil, req)
 	})
-	cli := dialForTest(t, srv, func(cfg *Config) {
+	cli := dialForTest(t, srv, func(cfg *ClientConfig) {
 		cfg.Timeout = 30 * time.Millisecond
 		cfg.Retries = 0
 		cfg.Reconnect = &ReconnectPolicy{Delay: time.Millisecond, MaxDelay: time.Millisecond, MaxAttempts: 1}
@@ -215,7 +215,7 @@ func TestReconnectBackoffIsBoundedAndJittered(t *testing.T) {
 func TestReconnectGivesUpAfterBoundedAttempts(t *testing.T) {
 	srv := newFakeServer(t)
 	srv.dropRequests(func(fakeRequest) bool { return true })
-	cli := dialForTest(t, srv, func(cfg *Config) {
+	cli := dialForTest(t, srv, func(cfg *ClientConfig) {
 		cfg.Retries = 0
 		cfg.Reconnect = &ReconnectPolicy{
 			Delay:       2 * time.Millisecond,
@@ -257,7 +257,7 @@ func TestReconnectGivesUpAfterBoundedAttempts(t *testing.T) {
 func TestCloseInterruptsReconnectWait(t *testing.T) {
 	srv := newFakeServer(t)
 	srv.dropRequests(func(fakeRequest) bool { return true })
-	cli := dialForTest(t, srv, func(cfg *Config) {
+	cli := dialForTest(t, srv, func(cfg *ClientConfig) {
 		cfg.Reconnect = &ReconnectPolicy{
 			Delay:       time.Second,
 			MaxDelay:    time.Second,
@@ -300,7 +300,7 @@ func TestCloseInterruptsReconnectWait(t *testing.T) {
 func TestReconnectWaitHonorsTheCallerContext(t *testing.T) {
 	srv := newFakeServer(t)
 	srv.dropRequests(func(fakeRequest) bool { return true })
-	cli := dialForTest(t, srv, func(cfg *Config) {
+	cli := dialForTest(t, srv, func(cfg *ClientConfig) {
 		cfg.Reconnect = &ReconnectPolicy{
 			Delay:       time.Second,
 			MaxDelay:    time.Second,

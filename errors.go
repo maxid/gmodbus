@@ -7,8 +7,8 @@ import (
 	"github.com/maxid/gnety/codec/modbus"
 )
 
-// Sentinels returned by the client. They are wrapped in a longer message, so
-// callers test them with errors.Is.
+// Sentinels returned by the client and the server. They are wrapped in a longer
+// message, so callers test them with errors.Is.
 var (
 	// ErrClosed is returned when the client has no connection: Close was called,
 	// or an exchange ran out of attempts and dropped the connection. With a
@@ -17,18 +17,24 @@ var (
 	ErrClosed = errors.New("gmodbus: client is closed")
 	// ErrTimeout is returned when every attempt timed out without a response.
 	ErrTimeout = errors.New("gmodbus: request timed out")
-	// ErrTransactionMismatch is returned when a response carries a different
-	// transaction id or unit id than the request it claims to answer.
-	ErrTransactionMismatch = errors.New("gmodbus: response does not match the request")
-	// ErrTLSConfig is wrapped by a TLS handshake failure that a retry cannot
-	// fix: a certificate that does not verify (unknown authority, expired,
-	// wrong host name) or a peer that does not speak TLS. Dial returns it, and a
+	// ErrResponseMismatch is returned when a response does not answer the
+	// request: a different transaction id or unit id for MBAP, a different unit
+	// id or function code for RTU, or a datagram carrying another exchange's
+	// reply.
+	ErrResponseMismatch = errors.New("gmodbus: response does not match the request")
+	// ErrTLSConfig is wrapped by a TLS or DTLS handshake failure that a retry
+	// cannot fix: a certificate that does not verify (unknown authority,
+	// expired, wrong host name) or a peer that does not speak the protocol. A
 	// reconnect gives up on it instead of spending its attempt budget.
 	ErrTLSConfig = errors.New("gmodbus: TLS configuration error")
-	// ErrTLSHandshake is wrapped by a TLS handshake failure that may clear on a
-	// fresh connection: a timeout, a reset or an early EOF. A reconnect may
-	// retry it.
-	ErrTLSHandshake = errors.New("gmodbus: TLS handshake failed")
+	// ErrServerClosed is returned by a server operation after Close.
+	ErrServerClosed = errors.New("gmodbus: server is closed")
+	// ErrUnhandled is returned by a Handler that does not want a request. The
+	// server then asks the default MemoryStore instead of sending an exception.
+	ErrUnhandled = errors.New("gmodbus: request not handled")
+	// ErrOutOfRange is returned by MemoryStore and UnitStore methods when an
+	// address or quantity falls outside the configured bank.
+	ErrOutOfRange = errors.New("gmodbus: address out of range")
 )
 
 // Error is a Modbus exception response mapped to an error.

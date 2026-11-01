@@ -64,7 +64,7 @@ func TestMetricsRecordsOneEventPerAttempt(t *testing.T) {
 	t.Run("ok", func(t *testing.T) {
 		srv := newFakeServer(t)
 		rec := &metricRecorder{}
-		cli := dialForTest(t, srv, func(cfg *Config) { cfg.Metrics = rec })
+		cli := dialForTest(t, srv, func(cfg *ClientConfig) { cfg.Metrics = rec })
 
 		if _, err := cli.ReadHoldingRegisters(ctx, 1, 0, 2); err != nil {
 			t.Fatalf("ReadHoldingRegisters: %v", err)
@@ -78,7 +78,7 @@ func TestMetricsRecordsOneEventPerAttempt(t *testing.T) {
 			return exceptionResponse(req, modbus.ExceptionIllegalDataAddress)
 		})
 		rec := &metricRecorder{}
-		cli := dialForTest(t, srv, func(cfg *Config) {
+		cli := dialForTest(t, srv, func(cfg *ClientConfig) {
 			cfg.Metrics = rec
 			cfg.Retries = 3
 		})
@@ -98,7 +98,7 @@ func TestMetricsRecordsOneEventPerAttempt(t *testing.T) {
 			return cannedResponse(nil, req)
 		})
 		rec := &metricRecorder{}
-		cli := dialForTest(t, srv, func(cfg *Config) {
+		cli := dialForTest(t, srv, func(cfg *ClientConfig) {
 			cfg.Metrics = rec
 			cfg.Timeout = 100 * time.Millisecond
 			cfg.Retries = 1
@@ -114,7 +114,7 @@ func TestMetricsRecordsOneEventPerAttempt(t *testing.T) {
 		srv := newFakeServer(t)
 		srv.onRequest(func(*fakeServer, fakeRequest) *modbus.Frame { return nil })
 		rec := &metricRecorder{}
-		cli := dialForTest(t, srv, func(cfg *Config) {
+		cli := dialForTest(t, srv, func(cfg *ClientConfig) {
 			cfg.Metrics = rec
 			cfg.Timeout = 50 * time.Millisecond
 			cfg.Retries = 1
@@ -132,17 +132,17 @@ func TestMetricsRecordsOneEventPerAttempt(t *testing.T) {
 			return replyWith(req, req.tx+1, req.unit)
 		})
 		rec := &metricRecorder{}
-		cli := dialForTest(t, srv, func(cfg *Config) { cfg.Metrics = rec })
+		cli := dialForTest(t, srv, func(cfg *ClientConfig) { cfg.Metrics = rec })
 
 		if _, err := cli.ReadHoldingRegisters(ctx, 1, 0, 2); err == nil {
-			t.Fatal("ReadHoldingRegisters: expected ErrTransactionMismatch")
+			t.Fatal("ReadHoldingRegisters: expected ErrResponseMismatch")
 		}
 		assertEvents(t, rec, ResultMismatch)
 	})
 
 	t.Run("nil hook", func(t *testing.T) {
 		srv := newFakeServer(t)
-		cli := dialForTest(t, srv, func(cfg *Config) { cfg.Metrics = nil })
+		cli := dialForTest(t, srv, func(cfg *ClientConfig) { cfg.Metrics = nil })
 
 		if _, err := cli.ReadHoldingRegisters(ctx, 1, 0, 2); err != nil {
 			t.Fatalf("ReadHoldingRegisters with a nil hook: %v", err)
@@ -151,7 +151,7 @@ func TestMetricsRecordsOneEventPerAttempt(t *testing.T) {
 
 	t.Run("noop hook", func(t *testing.T) {
 		srv := newFakeServer(t)
-		cli := dialForTest(t, srv, func(cfg *Config) { cfg.Metrics = NoopMetrics{} })
+		cli := dialForTest(t, srv, func(cfg *ClientConfig) { cfg.Metrics = NoopMetrics{} })
 
 		if _, err := cli.ReadHoldingRegisters(ctx, 1, 0, 2); err != nil {
 			t.Fatalf("ReadHoldingRegisters with NoopMetrics: %v", err)

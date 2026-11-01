@@ -15,13 +15,13 @@ import (
 
 // dialForTest connects a client to the fake server and closes it at the end of
 // the test.
-func dialForTest(t *testing.T, srv *fakeServer, tune func(*Config)) *Client {
+func dialForTest(t *testing.T, srv *fakeServer, tune func(*ClientConfig)) *Client {
 	t.Helper()
-	cfg := Config{Addr: srv.addr(), Timeout: 2 * time.Second}
+	cfg := ClientConfig{Addr: srv.addr(), Timeout: 2 * time.Second}
 	if tune != nil {
 		tune(&cfg)
 	}
-	cli, err := Dial(context.Background(), cfg)
+	cli, err := NewClient(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestExceptionIsADeliveredAnswer(t *testing.T) {
 		return exceptionResponse(req, modbus.ExceptionIllegalDataAddress)
 	})
 	// Retries are configured to prove an exception response is never retried.
-	cli := dialForTest(t, srv, func(cfg *Config) { cfg.Retries = 3 })
+	cli := dialForTest(t, srv, func(cfg *ClientConfig) { cfg.Retries = 3 })
 	ctx := context.Background()
 
 	_, err := cli.ReadHoldingRegisters(ctx, 5, 0x0100, 2)
@@ -233,7 +233,7 @@ func TestTimeoutThenSuccessOnRetry(t *testing.T) {
 		}
 		return cannedResponse(nil, req)
 	})
-	cli := dialForTest(t, srv, func(cfg *Config) {
+	cli := dialForTest(t, srv, func(cfg *ClientConfig) {
 		cfg.Timeout = 100 * time.Millisecond
 		cfg.Retries = 2
 	})
@@ -260,7 +260,7 @@ func TestTimeoutThenSuccessOnRetry(t *testing.T) {
 func TestRetriesExhaustedReturnsTimeout(t *testing.T) {
 	srv := newFakeServer(t)
 	srv.onRequest(func(*fakeServer, fakeRequest) *modbus.Frame { return nil })
-	cli := dialForTest(t, srv, func(cfg *Config) {
+	cli := dialForTest(t, srv, func(cfg *ClientConfig) {
 		cfg.Timeout = 50 * time.Millisecond
 		cfg.Retries = 2
 	})
@@ -288,7 +288,7 @@ func TestRetriesExhaustedReturnsTimeout(t *testing.T) {
 func TestTransportFailureThenRetry(t *testing.T) {
 	srv := newFakeServer(t)
 	srv.dropRequests(func(req fakeRequest) bool { return req.index == 0 })
-	cli := dialForTest(t, srv, func(cfg *Config) { cfg.Retries = 1 })
+	cli := dialForTest(t, srv, func(cfg *ClientConfig) { cfg.Retries = 1 })
 
 	got, err := cli.ReadHoldingRegisters(context.Background(), 1, 0x0010, 2)
 	if err != nil {
@@ -336,11 +336,11 @@ func TestResponseMustMatchTheRequest(t *testing.T) {
 		srv.onRequest(func(_ *fakeServer, req fakeRequest) *modbus.Frame {
 			return replyWith(req, req.tx+1, req.unit)
 		})
-		cli := dialForTest(t, srv, func(cfg *Config) { cfg.Retries = 2 })
+		cli := dialForTest(t, srv, func(cfg *ClientConfig) { cfg.Retries = 2 })
 
 		_, err := cli.ReadHoldingRegisters(ctx, 1, 0, 1)
-		if !errors.Is(err, ErrTransactionMismatch) {
-			t.Fatalf("ReadHoldingRegisters: %v, want ErrTransactionMismatch", err)
+		if !errors.Is(err, ErrResponseMismatch) {
+			t.Fatalf("ReadHoldingRegisters: %v, want ErrResponseMismatch", err)
 		}
 		if got := srv.count(); got != 1 {
 			t.Fatalf("server saw %d requests, want 1: a mismatch is not retried", got)
@@ -358,8 +358,8 @@ func TestResponseMustMatchTheRequest(t *testing.T) {
 		cli := dialForTest(t, srv, nil)
 
 		_, err := cli.ReadCoils(ctx, 1, 0, 1)
-		if !errors.Is(err, ErrTransactionMismatch) {
-			t.Fatalf("ReadCoils: %v, want ErrTransactionMismatch", err)
+		if !errors.Is(err, ErrResponseMismatch) {
+			t.Fatalf("ReadCoils: %v, want ErrResponseMismatch", err)
 		}
 		if got := srv.count(); got != 1 {
 			t.Fatalf("server saw %d requests, want 1", got)
@@ -436,7 +436,7 @@ func TestWaitingCallerHonorsItsContext(t *testing.T) {
 		}
 		return cannedResponse(nil, req)
 	})
-	cli := dialForTest(t, srv, func(cfg *Config) { cfg.Timeout = 2 * time.Second })
+	cli := dialForTest(t, srv, func(cfg *ClientConfig) { cfg.Timeout = 2 * time.Second })
 
 	first := make(chan error, 1)
 	go func() {
@@ -493,7 +493,7 @@ func TestInvalidRequestIsRejectedLocally(t *testing.T) {
 }
 
 func TestDialValidatesConfig(t *testing.T) {
-	cases := map[string]Config{
+	cases := map[string]ClientConfig{
 		"no address":        {},
 		"negative timeout":  {Addr: "127.0.0.1:0", Timeout: -time.Second},
 		"negative dial":     {Addr: "127.0.0.1:0", DialTimeout: -time.Second},
@@ -513,7 +513,7 @@ func TestDialValidatesConfig(t *testing.T) {
 		},
 	}
 	for name, cfg := range cases {
-		if _, err := Dial(context.Background(), cfg); err == nil {
+		if _, err := NewClient(context.Background(), cfg); err == nil {
 			t.Errorf("%s: expected an error", name)
 		}
 	}
