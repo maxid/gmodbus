@@ -63,7 +63,8 @@ type ServerConfig struct {
 	// Zero means unlimited.
 	MaxConnections int
 	// IdleTimeout closes a stream connection that sends no request within the
-	// interval and forgets an idle datagram peer. Zero disables it.
+	// interval and forgets an idle datagram peer. It does not apply to the
+	// serial transport. Zero disables it.
 	IdleTimeout time.Duration
 	// ShutdownTimeout bounds Close. Zero means DefaultShutdownTimeout.
 	ShutdownTimeout time.Duration

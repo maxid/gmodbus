@@ -18,6 +18,9 @@ import (
 // asks the server to fall back to the MemoryStore. Any other error is reported
 // through ServerConfig.OnError and becomes a ServerDeviceFailure exception; a
 // panic is recovered and reported the same way.
+//
+// ctx is cancelled when the request finishes or the server closes, so a handler
+// that waits on it releases Server.Close. The handler must not retain ctx.
 type Handler interface {
 	Handle(ctx context.Context, unit uint8, req modbus.Message) (modbus.Message, error)
 }

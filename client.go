@@ -39,8 +39,8 @@ type ClientConfig struct {
 	// NetworkRTU it is the serial device path, for example "/dev/ttyUSB0" or
 	// "COM3"; it is ignored when Port is set.
 	Addr string
-	// DialTimeout bounds one connect, including a TLS/DTLS handshake and a
-	// serial line open. Zero means DefaultDialTimeout.
+	// DialTimeout bounds one connect and the TLS/DTLS handshake. Zero means
+	// DefaultDialTimeout.
 	DialTimeout time.Duration
 	// Timeout bounds one attempt. Zero means DefaultTimeout.
 	Timeout time.Duration
