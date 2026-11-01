@@ -150,7 +150,15 @@ func TestServerMetrics(t *testing.T) {
 			mu.Unlock()
 		})
 	)
-	srv := newTestServer(t, func(cfg *ServerConfig) { cfg.Metrics = recorder })
+	srv := newTestServer(t, func(cfg *ServerConfig) {
+		cfg.Metrics = recorder
+		cfg.Handler = HandlerFunc(func(ctx context.Context, unit uint8, req modbus.Message) (modbus.Message, error) {
+			if unit == 2 {
+				return nil, errors.New("handler failed")
+			}
+			return nil, ErrUnhandled
+		})
+	})
 	unit := srv.store.unitFor(1)
 	if err := unit.SetHoldingRegister(0, 1); err != nil {
 		t.Fatal(err)
@@ -163,10 +171,14 @@ func TestServerMetrics(t *testing.T) {
 	if _, err := cli.ReadHoldingRegisters(ctx, 1, 5000, 1); err == nil {
 		t.Fatal("out-of-range read succeeded")
 	}
+	if _, err := cli.ReadHoldingRegisters(ctx, 2, 0, 1); err == nil {
+		t.Fatal("handler error read succeeded")
+	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(results) != 2 || results[0] != ServerResultOK || results[1] != ServerResultException {
-		t.Fatalf("results = %v", results)
+	want := []string{ServerResultOK, ServerResultException, ServerResultError}
+	if len(results) != len(want) || results[0] != want[0] || results[1] != want[1] || results[2] != want[2] {
+		t.Fatalf("results = %v, want %v", results, want)
 	}
 }
 

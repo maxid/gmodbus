@@ -33,7 +33,7 @@ func (f HandlerFunc) Handle(ctx context.Context, unit uint8, req modbus.Message)
 // dispatch resolves one request through the handler, the memory store and the
 // device identification fallback, in that order. It returns the response and
 // whether one must be sent at all (a broadcast write has no response).
-func (s *Server) dispatch(ctx context.Context, unit uint8, req modbus.Message) (modbus.Message, bool) {
+func (s *Server) dispatch(ctx context.Context, unit uint8, req modbus.Message) (modbus.Message, bool, string) {
 	if s.handler != nil {
 		resp, err := s.handler.Handle(ctx, unit, req)
 		if !errors.Is(err, ErrUnhandled) {
@@ -56,27 +56,27 @@ func (s *Server) dispatch(ctx context.Context, unit uint8, req modbus.Message) (
 
 // finish turns a handler result into a response message. A nil response with no
 // error means "send nothing".
-func (s *Server) finish(req modbus.Message, resp modbus.Message, err error) (modbus.Message, bool) {
+func (s *Server) finish(req modbus.Message, resp modbus.Message, err error) (modbus.Message, bool, string) {
 	if err != nil {
 		var exception *modbus.Exception
 		switch {
 		case errors.As(err, &exception):
-			return exception, true
+			return exception, true, ServerResultException
 		case errors.Is(err, ErrOutOfRange):
-			return exceptionFor(req, modbus.ExceptionIllegalDataAddress), true
+			return exceptionFor(req, modbus.ExceptionIllegalDataAddress), true, ServerResultException
 		default:
 			s.reportError(err)
-			return exceptionFor(req, modbus.ExceptionServerDeviceFailure), true
+			return exceptionFor(req, modbus.ExceptionServerDeviceFailure), true, ServerResultError
 		}
 	}
 	if resp == nil {
-		return nil, false
+		return nil, false, ServerResultOK
 	}
 	if function := resp.Function(); function != req.Function() && !modbus.IsException(function) {
 		s.reportError(errors.New("gmodbus: handler returned a response for another function code"))
-		return exceptionFor(req, modbus.ExceptionServerDeviceFailure), true
+		return exceptionFor(req, modbus.ExceptionServerDeviceFailure), true, ServerResultError
 	}
-	return resp, true
+	return resp, true, ServerResultOK
 }
 
 // exceptionFor builds an exception response for the request's function code.
@@ -87,25 +87,23 @@ func exceptionFor(req modbus.Message, code modbus.ExceptionCode) *modbus.Excepti
 // handleRequest dispatches one decoded request, applies the RTU broadcast rule
 // and reports the attempt through ServerMetrics.
 func (s *Server) handleRequest(unit uint8, req modbus.Message) (resp modbus.Message, respond bool) {
+	result := ServerResultOK
 	// A misbehaving handler must not take the serving goroutine with it.
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			s.reportError(fmt.Errorf("gmodbus: handler panic: %v", recovered))
 			resp = exceptionFor(req, modbus.ExceptionServerDeviceFailure)
 			respond = true
+			result = ServerResultError
 		}
 	}()
 	start := time.Now()
-	resp, respond = s.dispatch(context.Background(), unit, req)
+	resp, respond, result = s.dispatch(context.Background(), unit, req)
 	if s.network.rtuFamily() && unit == 0 {
 		// A broadcast is applied but never answered.
 		respond = false
 	}
 	if s.metrics != nil {
-		result := ServerResultOK
-		if _, ok := resp.(*modbus.Exception); ok {
-			result = ServerResultException
-		}
 		s.metrics.Request(req.Function(), result, time.Since(start))
 	}
 	return resp, respond
