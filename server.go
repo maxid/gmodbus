@@ -94,7 +94,8 @@ type Server struct {
 	metrics   ServerMetrics
 	onError   func(error)
 
-	idleTimeout time.Duration
+	idleTimeout     time.Duration
+	shutdownTimeout time.Duration
 
 	// gnety carries every network transport; nil for the serial transport.
 	gnety *gnety.Server
@@ -118,19 +119,20 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 	}
 	closeCtx, closeCancel := context.WithCancel(context.Background())
 	s := &Server{
-		network:     cfg.Network,
-		addr:        cfg.Addr,
-		handler:     cfg.Handler,
-		store:       cfg.Store,
-		device:      cfg.Device,
-		functions:   cfg.Functions,
-		rtu:         cfg.RTU,
-		maxPDU:      cfg.MaxPDU,
-		metrics:     cfg.Metrics,
-		onError:     cfg.OnError,
-		idleTimeout: cfg.IdleTimeout,
-		closeCtx:    closeCtx,
-		closeCancel: closeCancel,
+		network:         cfg.Network,
+		addr:            cfg.Addr,
+		handler:         cfg.Handler,
+		store:           cfg.Store,
+		device:          cfg.Device,
+		functions:       cfg.Functions,
+		rtu:             cfg.RTU,
+		maxPDU:          cfg.MaxPDU,
+		metrics:         cfg.Metrics,
+		onError:         cfg.OnError,
+		idleTimeout:     cfg.IdleTimeout,
+		shutdownTimeout: cfg.ShutdownTimeout,
+		closeCtx:        closeCtx,
+		closeCancel:     closeCancel,
 	}
 	if cfg.Network.serial() {
 		port, err := s.openPort(cfg)
@@ -221,6 +223,9 @@ func normalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	if cfg.PacketConn != nil && cfg.Network != NetworkUDP && cfg.Network != NetworkRTUOverUDP {
 		return cfg, errors.New("gmodbus: ServerConfig.PacketConn is only valid for the UDP transports")
 	}
+	if cfg.Listener != nil && (cfg.Network == NetworkUDP || cfg.Network == NetworkRTUOverUDP) {
+		return cfg, errors.New("gmodbus: ServerConfig.Listener is not valid for the UDP transports")
+	}
 	if cfg.Listener != nil && cfg.Network == NetworkUDP {
 		return cfg, errors.New("gmodbus: ServerConfig.Listener is not valid for the UDP transport")
 	}
@@ -309,7 +314,18 @@ func (s *Server) Close() error {
 			err = closeErr
 		}
 	}
-	s.wg.Wait()
+	// The serial loop is the one goroutine the caller's Close cannot force: it
+	// may sit in a driver that ignores a close. Bound the wait like gnety does.
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(s.shutdownTimeout):
+		return fmt.Errorf("gmodbus: server close did not finish within %s: %w", s.shutdownTimeout, context.DeadlineExceeded)
+	}
 	return err
 }
 

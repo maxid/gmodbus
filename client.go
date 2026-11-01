@@ -449,8 +449,8 @@ func (c *Client) do(ctx context.Context, unit uint8, req modbus.Message) (modbus
 	// On the RTU transports unit 0 is a broadcast: a write is sent once and
 	// never answered, and a read has no meaning.
 	broadcast := c.network.rtuFamily() && unit == 0
-	if broadcast && !isWrite(req) {
-		return nil, errors.New("gmodbus: unit 0 is a broadcast for write requests only")
+	if broadcast && !broadcastable(req) {
+		return nil, errors.New("gmodbus: unit 0 is a broadcast for the single and multiple write function codes")
 	}
 	if c.isClosed() {
 		return nil, ErrClosed

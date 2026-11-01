@@ -87,7 +87,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("modbus: connect to %s: %v", *addr, err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	registers, err := cli.ReadHoldingRegisters(ctx, uint8(*unit), uint16(*start), uint16(*quantity))
 	if err != nil {

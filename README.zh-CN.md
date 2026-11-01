@@ -101,7 +101,7 @@ defer srv.Close()
 | --- | --- | --- |
 | `Network` | 传输 | `NetworkTCP` |
 | `Addr` | `host:port` 或串口设备路径 | 必填（`Port` 例外） |
-| `DialTimeout` | 单次连接、TLS/DTLS 握手或串口打开的界限 | `DefaultDialTimeout`（5s） |
+| `DialTimeout` | 单次连接与 TLS/DTLS 握手的界限 | `DefaultDialTimeout`（5s） |
 | `Timeout` | 单次尝试（写+读）的界限 | `DefaultTimeout`（5s） |
 | `Retries` | 首次之外的额外尝试，仅超时/传输失败 | 一次尝试 |
 | `MaxPDU` | 入站 PDU 上限 | `modbus.MaxPDU` |
@@ -134,8 +134,8 @@ defer srv.Close()
 | 0x2B/0x0E 读设备标识 | `ReadDeviceIdentification` | `*modbus.ReadDeviceIdentificationResponse` |
 | 任意已注册消息 | `Execute(ctx, unit, req)` | `modbus.Message` |
 
-0x17 先写后读且只占一个事务。设备标识响应可能带 `MoreFollows`/`NextObjectID`，调用方
-用该对象 ID 再发一次请求继续读取。
+0x17 先写后读且只占一个事务。设备标识响应可能带 `MoreFollows`/`NextObjectID`，调用方用
+相同 read code 加该对象 ID 再发一次请求继续读取。
 
 ### 厂商功能码
 
@@ -160,8 +160,12 @@ resp, err := cli.Execute(ctx, 1, &myVendorRequest{...})
 
 ### RTU 广播
 
-`rtu`、`rtu-tcp`、`rtu-udp` 上 unit 0 是广播：写方法发送后立即返回，服务端生效但不回包；
-对 unit 0 的读返回错误。MBAP 传输上 unit 0 是普通 unit。
+`rtu`、`rtu-tcp`、`rtu-udp` 上 unit 0 是广播：会改变状态的写方法（0x05、0x06、0x0F、
+0x10、0x16）发送后立即返回，服务端生效但不回包；读请求以及带读的 0x17 直接返回错误，
+不会上线。MBAP 传输上 unit 0 是普通 unit。
+
+广播没有确认，传输失败后的重试或重连可能把同一次写应用两次；只有设备侧幂等时广播写才
+安全。
 
 ## 服务端
 
@@ -192,17 +196,29 @@ srv, err := gmodbus.NewServer(ctx, gmodbus.ServerConfig{
 3. `DeviceIdentification` 在 Handler 与 Store 都未处理 0x2B/0x0E 时代答。
 4. 仍未处理则回 `IllegalFunction`。
 
-Handler 的 panic 会被捕获、经 `OnError` 上报，并回 `ServerDeviceFailure`。
+Handler 的 panic 会被捕获、经 `OnError` 上报、回 `ServerDeviceFailure`，并记为
+`ServerResultError`。传给 Handler 的 context 在请求结束或服务端关闭时取消，因此阻塞的
+Handler 不会把 `Close` 拖住。
 
 ### MemoryStore
 
 - 每个 unit 独立四区，地址都从 0 开始。
+- `AddUnit` 创建或替换一个 unit；替换正在被请求使用的 unit 会丢弃该请求对旧区的写入。
 - `UnitConfig` 配置各区大小，零字段取 `DefaultUnitSize`（1024）。请求一个尚不存在的
   unit 时会按默认配置懒创建，因此任意 unit 都可用。
 - `UnitStore` 提供 `Coils`/`SetCoils`/`Coil`/`SetCoil`、`HoldingRegisters`/
   `SetHoldingRegisters`、`MaskWrite`、`ReadWrite`，离散输入与输入寄存器同理。
-- `OnWrite` 在写成功后回调（值已复制），在锁外执行；广播会为每个 unit 各报告一次。
+- `OnWrite` 在写成功后回调（值已复制），在锁外执行，因此回调内不能阻塞；广播会为每个 unit 各报告一次。
+- 请求一个不存在的 unit 会创建它，因此不断更换 unit id 的对端会撑大存储。面对不可信对端时，
+  预先创建要服务的 unit，并在 `Handler` 里拦掉其余请求（或固定默认配置后拒绝未知 unit）。
 - 0x17 在同一把 unit 锁内完成写与读，符合该功能码的原子语义。
+
+### 设备标识
+
+`DeviceIdentification` 用自身字符串填充七个标识对象，空字符串不会出现在响应里。超过
+`MaxPDU` 的响应会拆分：服务端设置 `MoreFollows` 与 `NextObjectID`，客户端用相同 read code
+加该对象 ID 继续。符合级别默认按 read code 推导（0x81 basic、0x82 regular、0x83 extended，
+即支持 individual 访问）；`ConformityLevel` 可显式覆盖。
 
 ### 服务端配置
 
@@ -216,7 +232,7 @@ Handler 的 panic 会被捕获、经 `OnError` 上报，并回 `ServerDeviceFail
 | `Functions` | 厂商功能码注册表 | 仅内置功能码 |
 | `MaxPDU` | 入站 PDU 上限 | `modbus.MaxPDU` |
 | `MaxConnections` | 并发流连接/数据报 peer 上限 | 不限 |
-| `IdleTimeout` | 关闭空闲流连接；遗忘空闲数据报 peer | 关闭 |
+| `IdleTimeout` | 关闭空闲流连接；遗忘空闲数据报 peer（串口不适用） | 关闭；UDP/DTLS 应设置以回收 peer |
 | `ShutdownTimeout` | `Close` 的界限 | `DefaultShutdownTimeout`（5s） |
 | `Metrics` | 每请求钩子 | 无，且零成本 |
 | `OnError` | 传输与 Handler 错误 | 丢弃 |
@@ -264,7 +280,6 @@ Handler 的 panic 会被捕获、经 `OnError` 上报，并回 `ServerDeviceFail
 | `ErrTimeout` | 所有尝试都超时 |
 | `ErrResponseMismatch` | 响应不回答本请求 |
 | `ErrTLSConfig` | 永久 TLS/DTLS 握手失败，重试无益 |
-| `ErrServerClosed` | 服务端关闭后的操作 |
 | `ErrUnhandled` | Handler 不接受该请求，回落寄存器区 |
 | `ErrOutOfRange` | 寄存器区地址/数量越界 |
 | `*gmodbus.Error` | Modbus 异常响应；可 unwrap 到 `modbus.ErrException` |

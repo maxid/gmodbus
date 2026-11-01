@@ -454,6 +454,21 @@ func inRange(address, quantity uint16, size int) bool {
 	return int(address)+int(quantity) <= size
 }
 
+// broadcastable reports whether req may be sent as an RTU broadcast. Only the
+// write function codes qualify: 0x17 also reads registers, which a broadcast
+// cannot return.
+func broadcastable(req modbus.Message) bool {
+	switch req.(type) {
+	case modbus.WriteSingleCoil, *modbus.WriteSingleCoil,
+		modbus.WriteSingleRegister, *modbus.WriteSingleRegister,
+		modbus.MaskWriteRegister, *modbus.MaskWriteRegister,
+		*modbus.WriteMultipleCoilsRequest, *modbus.WriteMultipleRegistersRequest:
+		return true
+	default:
+		return false
+	}
+}
+
 // isWrite reports whether req changes a bank.
 func isWrite(req modbus.Message) bool {
 	switch req.(type) {
@@ -478,9 +493,18 @@ type DeviceIdentification struct {
 	ProductName         string
 	ModelName           string
 	UserApplicationName string
+	// ConformityLevel overrides the conformity level reported in a response.
+	// Zero reports the level implied by the read code (0x81 for basic, 0x82 for
+	// regular, 0x83 for extended), because individual access is supported.
+	ConformityLevel byte
 }
 
 // objects returns the objects selected by a read code, in object-id order.
+//
+// objectID is the first object of the response. A streamed read (basic,
+// regular, extended) that is split across responses is continued by sending the
+// same read code with the NextObjectID the previous response reported, so the
+// selection starts at that object rather than at the beginning again.
 func (d *DeviceIdentification) objects(readCode, objectID byte) []modbus.DeviceObject {
 	all := []modbus.DeviceObject{
 		{ID: modbus.DeviceIDVendorName, Value: []byte(d.VendorName)},
@@ -509,11 +533,28 @@ func (d *DeviceIdentification) objects(readCode, objectID byte) []modbus.DeviceO
 	}
 	out := make([]modbus.DeviceObject, 0, limit)
 	for _, object := range all[:limit] {
-		if len(object.Value) > 0 {
-			out = append(out, object)
+		if object.ID < objectID || len(object.Value) == 0 {
+			continue
 		}
+		out = append(out, object)
 	}
 	return out
+}
+
+// conformity reports the conformity level of a response: the configured
+// override when set, otherwise the level the read code implies.
+func (d *DeviceIdentification) conformity(readCode byte) byte {
+	if d.ConformityLevel != 0 {
+		return d.ConformityLevel
+	}
+	switch readCode {
+	case modbus.DeviceIDBasic:
+		return 0x81
+	case modbus.DeviceIDRegular:
+		return 0x82
+	default:
+		return 0x83
+	}
 }
 
 // handle builds one device identification response, splitting the object list
@@ -527,7 +568,7 @@ func (d *DeviceIdentification) handle(req *modbus.ReadDeviceIdentificationReques
 	remaining := maxPDU - fixed
 	resp := &modbus.ReadDeviceIdentificationResponse{
 		ReadCode:        req.ReadCode,
-		ConformityLevel: 0x83,
+		ConformityLevel: d.conformity(req.ReadCode),
 	}
 	for i, object := range objects {
 		need := 2 + len(object.Value)

@@ -36,7 +36,7 @@ type serverResponse struct {
 // serveStream is the gnety RawHandler for tcp, tls and rtu-tcp. One connection
 // carries one request at a time and is answered in order.
 func (s *Server) serveStream(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	reader := bufio.NewReader(conn)
 	for {
 		if s.idleTimeout > 0 {
@@ -82,6 +82,11 @@ func (s *Server) serveSerial() {
 				return
 			}
 			s.reportError(fmt.Errorf("gmodbus: read serial request: %w", err))
+			// A port that fails every read (unplugged adapter, a closed handle
+			// the driver does not report as such) must not turn into a busy loop.
+			if !s.waitSerialRetry() {
+				return
+			}
 			continue
 		}
 		resp, respond := s.handleServerRequest(req)
@@ -122,6 +127,23 @@ func (s *Server) readStreamRequest(r *bufio.Reader) (serverRequest, error) {
 	return req, nil
 }
 
+// waitSerialRetry waits out one serial read failure. It reports false when the
+// server closed while waiting.
+func (s *Server) waitSerialRetry() bool {
+	timer := time.NewTimer(serialRetryDelay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-s.closeCtx.Done():
+		return false
+	}
+}
+
+// serialRetryDelay spaces out consecutive serial read failures, so a broken
+// port costs a retry every 100ms instead of a busy loop.
+const serialRetryDelay = 100 * time.Millisecond
+
 // handleServerRequest turns one decoded frame into a response. A PDU the codec
 // rejected becomes an exception when the function code was readable.
 func (s *Server) handleServerRequest(req serverRequest) (modbus.Message, bool) {
@@ -134,12 +156,19 @@ func (s *Server) handleServerRequest(req serverRequest) (modbus.Message, bool) {
 		if s.metrics != nil {
 			s.metrics.Request(req.function, ServerResultException, 0)
 		}
-		return exceptionForFunction(req.function, code), true
+		// A broadcast is never answered, not even to report the bad frame.
+		return exceptionForFunction(req.function, code), !s.isBroadcast(req.unit)
 	}
 	if req.msg == nil {
 		return nil, false
 	}
 	return s.handleRequest(req.unit, req.msg)
+}
+
+// isBroadcast reports whether a request is a broadcast on this transport. Only
+// the RTU transports define unit 0 as a broadcast; MBAP treats it as a unit.
+func (s *Server) isBroadcast(unit uint8) bool {
+	return s.network.rtuFamily() && unit == 0
 }
 
 // encodeStreamResponse builds the wire frame for a response.

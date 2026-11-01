@@ -80,7 +80,7 @@ func startRTUFake(t *testing.T, respond func(modbus.RTUFrame) modbus.RTUFrame) s
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		reader := bufio.NewReader(conn)
 		for {
 			frame, err := (modbus.RTUOptions{}).Read(reader, 0, nil)
@@ -122,7 +122,7 @@ func TestRTUResponseMismatch(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewClient: %v", err)
 			}
-			defer cli.Close()
+			defer func() { _ = cli.Close() }()
 			_, err = cli.ReadHoldingRegisters(context.Background(), 1, 0, 1)
 			if !errors.Is(err, ErrResponseMismatch) {
 				t.Fatalf("read = %v, want ErrResponseMismatch", err)
@@ -149,7 +149,7 @@ func TestRTUUnsupportedResponseFunctionIsAProtocolError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	_, err = cli.ReadHoldingRegisters(context.Background(), 1, 0, 1)
 	if err == nil {
 		t.Fatal("read succeeded")

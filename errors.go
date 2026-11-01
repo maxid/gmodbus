@@ -27,8 +27,6 @@ var (
 	// expired, wrong host name) or a peer that does not speak the protocol. A
 	// reconnect gives up on it instead of spending its attempt budget.
 	ErrTLSConfig = errors.New("gmodbus: TLS configuration error")
-	// ErrServerClosed is returned by a server operation after Close.
-	ErrServerClosed = errors.New("gmodbus: server is closed")
 	// ErrUnhandled is returned by a Handler that does not want a request. The
 	// server then asks the default MemoryStore instead of sending an exception.
 	ErrUnhandled = errors.New("gmodbus: request not handled")

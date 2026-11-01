@@ -87,8 +87,10 @@ func exceptionFor(req modbus.Message, code modbus.ExceptionCode) *modbus.Excepti
 // handleRequest dispatches one decoded request, applies the RTU broadcast rule
 // and reports the attempt through ServerMetrics.
 func (s *Server) handleRequest(unit uint8, req modbus.Message) (resp modbus.Message, respond bool) {
+	start := time.Now()
 	result := ServerResultOK
-	// A misbehaving handler must not take the serving goroutine with it.
+	// A misbehaving handler must not take the serving goroutine with it, and the
+	// attempt is reported exactly once whichever way it ends.
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			s.reportError(fmt.Errorf("gmodbus: handler panic: %v", recovered))
@@ -96,15 +98,18 @@ func (s *Server) handleRequest(unit uint8, req modbus.Message) (resp modbus.Mess
 			respond = true
 			result = ServerResultError
 		}
+		if s.metrics != nil {
+			s.metrics.Request(req.Function(), result, time.Since(start))
+		}
 	}()
-	start := time.Now()
-	resp, respond, result = s.dispatch(context.Background(), unit, req)
-	if s.network.rtuFamily() && unit == 0 {
+	// The handler's context ends when the request is done or the server closes,
+	// so a blocking handler cannot hold Close open forever.
+	ctx, cancel := context.WithCancel(s.closeCtx)
+	defer cancel()
+	resp, respond, result = s.dispatch(ctx, unit, req)
+	if s.isBroadcast(unit) {
 		// A broadcast is applied but never answered.
 		respond = false
-	}
-	if s.metrics != nil {
-		s.metrics.Request(req.Function(), result, time.Since(start))
 	}
 	return resp, respond
 }

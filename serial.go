@@ -146,7 +146,7 @@ func newPortConn(port Port, path string) net.Conn {
 func (c *portConn) LocalAddr() net.Addr  { return c.addr }
 func (c *portConn) RemoteAddr() net.Addr { return c.addr }
 
-func (c *portConn) SetReadDeadline(t time.Time) error { return c.Port.SetDeadline(t) }
+func (c *portConn) SetReadDeadline(t time.Time) error { return c.SetDeadline(t) }
 
 // SetWriteDeadline reports success without doing anything: the serial package
 // has no write timeout.

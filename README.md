@@ -109,7 +109,7 @@ rejected on the serial transport, where the specification requires the checksum.
 | --- | --- | --- |
 | `Network` | transport | `NetworkTCP` |
 | `Addr` | `host:port`, or the serial device path | required (unless `Port`) |
-| `DialTimeout` | bound on one connect, TLS/DTLS handshake or serial open | `DefaultDialTimeout` (5s) |
+| `DialTimeout` | bound on one connect and the TLS/DTLS handshake | `DefaultDialTimeout` (5s) |
 | `Timeout` | bound on one attempt, write plus read | `DefaultTimeout` (5s) |
 | `Retries` | extra attempts after the first, timeout/transport only | one attempt |
 | `MaxPDU` | inbound PDU limit | `modbus.MaxPDU` |
@@ -145,7 +145,8 @@ honor `SetDeadline`; it is closed by `Client.Close`.
 
 A read/write-multiple request applies the write before the read and is one
 transaction. A device-identification response may set `MoreFollows` and
-`NextObjectID`; send another request with that object id to continue.
+`NextObjectID`; send another request with the same read code and that object id
+to continue.
 
 ### Vendor function codes
 
@@ -176,10 +177,15 @@ by the built-in decoder, so a vendor request still receives one correctly.
 
 ### RTU broadcast
 
-On `rtu`, `rtu-tcp` and `rtu-udp` unit 0 is a broadcast. A write method sends the
-request and returns once it is written; the server applies it without a reply.
-A read to unit 0 returns an error because a broadcast has no answer. On the MBAP
+On `rtu`, `rtu-tcp` and `rtu-udp` unit 0 is a broadcast. The write methods that
+change state (0x05, 0x06, 0x0F, 0x10, 0x16) send the request and return once it
+is written; the server applies it without a reply. A read, and 0x17 because it
+carries a read, returns an error instead of going on the wire. On the MBAP
 transports unit 0 is an ordinary unit id.
+
+A broadcast has no acknowledgement, so a retry or a reconnect after a transport
+failure can apply the same write twice; a broadcast write is only safe where the
+device treats it as idempotent.
 
 ## Server
 
@@ -218,12 +224,16 @@ passed to `NewServer` does the same.
    unhandled.
 4. Anything still unhandled becomes `IllegalFunction`.
 
-A panic in a handler is recovered, reported through `OnError`, and answered with
-`ServerDeviceFailure`.
+A panic in a handler is recovered, reported through `OnError`, answered with
+`ServerDeviceFailure` and counted as `ServerResultError`. The context passed to a
+handler is cancelled when the request finishes or the server closes, so a
+blocking handler releases `Close`.
 
 ### MemoryStore
 
 - One independent set of four banks per unit id; every bank is addressed from 0.
+- `AddUnit` creates or replaces a unit. Replacing a unit a request is using
+  discards that request's writes to the old banks.
 - `UnitConfig` sizes the banks; a zero field takes `DefaultUnitSize` (1024). A
   request for a unit that does not exist yet creates it with the store's default
   configuration, so any unit id works.
@@ -231,9 +241,23 @@ A panic in a handler is recovered, reported through `OnError`, and answered with
   `SetHoldingRegisters`, `MaskWrite`, `ReadWrite` and the equivalent methods for
   discrete inputs and input registers.
 - `OnWrite` reports successful writes with copies of the changed values; it runs
-  outside the store lock. A broadcast reports one event per unit.
+  outside the store lock, so it must not block. A broadcast reports one event per
+  unit.
+- A request for a unit that does not exist creates it, so a peer that keeps
+  changing the unit id grows the store. When the server faces untrusted peers,
+  pre-create the units you serve and gate the rest in a `Handler`, or size the
+  default unit config and reject unknown units there.
 - 0x17 applies the write and reads the registers under one unit lock, exactly as
   the function defines.
+
+### Device identification
+
+`DeviceIdentification` fills the seven identification objects from the strings it
+carries; an empty string is left out of the response. A response that does not
+fit into `MaxPDU` is split: the server sets `MoreFollows` and `NextObjectID`, and
+the client continues with the same read code and that object id. The conformity
+level defaults to the read code (0x81 basic, 0x82 regular, 0x83 extended, i.e.
+individual access is supported); set `ConformityLevel` to override it.
 
 ### Server config
 
@@ -247,7 +271,7 @@ A panic in a handler is recovered, reported through `OnError`, and answered with
 | `Functions` | vendor function-code registry | built-in codes only |
 | `MaxPDU` | inbound PDU limit | `modbus.MaxPDU` |
 | `MaxConnections` | concurrent stream connections / datagram peers | unlimited |
-| `IdleTimeout` | closes an idle stream connection; forgets an idle datagram peer | disabled |
+| `IdleTimeout` | closes an idle stream connection; forgets an idle datagram peer (not used by the serial transport) | disabled; set it for UDP/DTLS so peers expire |
 | `ShutdownTimeout` | bound on `Close` | `DefaultShutdownTimeout` (5s) |
 | `Metrics` | per-request hook | none, and it costs nothing |
 | `OnError` | transport and handler errors | discard |
@@ -309,7 +333,6 @@ verify, a peer that does not speak the protocol or a security alert wraps
 | `ErrTimeout` | every attempt timed out |
 | `ErrResponseMismatch` | the reply did not answer the request |
 | `ErrTLSConfig` | a permanent TLS/DTLS handshake failure; a retry cannot fix it |
-| `ErrServerClosed` | a server operation after `Close` |
 | `ErrUnhandled` | a handler declined a request; fall back to the store |
 | `ErrOutOfRange` | a store address or quantity is outside its bank |
 | `*gmodbus.Error` | a Modbus exception response; unwraps to `modbus.ErrException` |

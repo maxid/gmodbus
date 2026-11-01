@@ -40,6 +40,15 @@
   interoperability with `github.com/simonvetter/modbus` (TCP in both directions,
   and its RTU-over-TCP/RTU-over-UDP/UDP client against this server). The interop
   package is a test-only dependency.
+- Fixes after review: a split device-identification response continues from the
+  requested object instead of restarting at the first one, and the conformity
+  level follows the read code (overridable with
+  `DeviceIdentification.ConformityLevel`); a malformed RTU broadcast frame is no
+  longer answered; the handler context is cancelled on `Close` and a handler
+  panic is counted as `ServerResultError`; the serial loop backs off after a read
+  failure and `Close` is bounded by `ShutdownTimeout`; broadcast is limited to
+  the state-changing write codes (0x17 is refused); `ErrServerClosed`, which was
+  never returned, is removed.
 
 - New library: a Modbus TCP master on `gnety/codec/modbus`.
 - `Client` with typed operations for function codes 0x01, 0x02, 0x03, 0x04,

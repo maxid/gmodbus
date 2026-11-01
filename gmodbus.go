@@ -89,9 +89,6 @@ func (n Network) rtuFamily() bool {
 // serial reports whether the transport is a serial line.
 func (n Network) serial() bool { return n == NetworkRTU }
 
-// secure reports whether the transport is encrypted.
-func (n Network) secure() bool { return n == NetworkTLS || n == NetworkDTLS }
-
 // Parity is a serial line parity setting.
 type Parity uint8
 

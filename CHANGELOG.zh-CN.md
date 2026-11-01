@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+- **破坏性变更：**统一入口 `NewClient(ctx, ClientConfig)` 取代 `Dial`/`Config`；客户端按 `Network` 支持 TCP、TLS、UDP、DTLS、串口 RTU、RTU over TCP 与 RTU over UDP。`ErrTransactionMismatch` 改为 `ErrResponseMismatch`，因为 RTU 应答按 unit id 与功能码匹配，没有 transaction id。
+- 新增服务端：`NewServer(ctx, ServerConfig)` 提供同样七种传输。`Handler` 优先，`MemoryStore` 按 unit 应答标准功能码，`DeviceIdentification` 应答 0x2B/0x0E。RTU unit 0 是广播：写生效不回包，读被拒绝；Handler panic 恢复为 `ServerDeviceFailure`。
+- 新增 `MemoryStore`：每个 unit 独立的线圈、离散输入、保持寄存器、输入寄存器，按 `UnitConfig` 定容、懒创建，`OnWrite` 在锁外回调。
+- 新增功能码：0x16 掩码写、0x17 读写多寄存器、0x2B/0x0E 读设备标识，客户端与服务端都覆盖；`Client.Execute` 可发送任意已注册的 `modbus.Message`。
+- 厂商功能码：`ClientConfig.Functions`/`ServerConfig.Functions` 解码非标功能码或替换标准码载荷，含流式传输所需的 RTU 帧长回调。
+- RTU 分帧与 CRC16（及去 CRC 的 `NoCRC` 网关变体）来自 `gnety/codec/modbus`；串口始终校验 CRC。内置串口用 `go.bug.st/serial`，可用 `Port` 替换（`net.Conn` 满足），测试不需要硬件。
+- 传输走 gnety 的 client/server：接受内存态 `*tls.Config`/`*dtls.Config`，客户端用 `SetDeadline` 实现单次尝试超时与取消；流传输用 `RawHandler`，数据报用 `DatagramCodec` 与 session。
+- `ServerMetrics` 低基数请求结果，另有 `MaxConnections`、`IdleTimeout`、`ShutdownTimeout`、`OnError` 与可注入的 `Listener`/`PacketConn`/`Port`。
+- 测试覆盖七种传输回环、TLS/DTLS 自签证书、`net.Pipe` 上的 RTU、广播、Handler 回落与 panic、未知功能码、限额与空闲恢复，以及与 `github.com/simonvetter/modbus` 的互操作（TCP 双向，以及对方 RTU-over-TCP/RTU-over-UDP/UDP client 对本站 server）。该包仅测试使用。
+- 评审修复：设备标识分片后按请求的对象续读而不是从头重来，符合级别按 read code 推导（`DeviceIdentification.ConformityLevel` 可覆盖）；RTU 广播的坏帧不再回包；Handler context 在 `Close` 时取消，Handler panic 记为 `ServerResultError`；串口读失败后加入退避，`Close` 受 `ShutdownTimeout` 约束；广播只允许会改变状态的写功能码（0x17 被拒绝）；删除从未使用的 `ErrServerClosed`。
+
 - 新库：基于 `gnety/codec/modbus` 的 Modbus TCP master。
 - `Client` 提供 0x01、0x02、0x03、0x04、0x05、0x06、0x0F、0x10 的类型化操作：`ReadCoils`、`ReadDiscreteInputs`、`ReadHoldingRegisters`、`ReadInputRegisters`、`WriteSingleCoil`、`WriteSingleRegister`、`WriteMultipleCoils`、`WriteMultipleRegisters`。
 - 事务处理：自动 transaction id，按 transaction id + unit id 匹配，应答了其它请求时返回 `ErrTransactionMismatch`。

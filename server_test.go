@@ -182,6 +182,30 @@ func TestServerMetrics(t *testing.T) {
 	}
 }
 
+func TestServerMetricsOnPanic(t *testing.T) {
+	results := make(chan string, 4)
+	srv := newTestServer(t, func(cfg *ServerConfig) {
+		cfg.Metrics = ServerMetricsFunc(func(_ byte, result string, _ time.Duration) {
+			results <- result
+		})
+		cfg.Handler = HandlerFunc(func(context.Context, uint8, modbus.Message) (modbus.Message, error) {
+			panic("boom")
+		})
+	})
+	cli := newTestClient(t, srv.Addr(), nil)
+	if _, err := cli.ReadCoils(context.Background(), 1, 0, 1); err == nil {
+		t.Fatal("read succeeded")
+	}
+	select {
+	case result := <-results:
+		if result != ServerResultError {
+			t.Fatalf("result = %q, want %q", result, ServerResultError)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("a panicking handler produced no metric")
+	}
+}
+
 // ServerMetricsFunc adapts a function to ServerMetrics.
 type ServerMetricsFunc func(byte, string, time.Duration)
 
@@ -265,6 +289,8 @@ func TestServerValidation(t *testing.T) {
 		{"negative shutdown", ServerConfig{Network: NetworkTCP, Addr: "127.0.0.1:0", ShutdownTimeout: -1}},
 		{"pdu too large", ServerConfig{Network: NetworkTCP, Addr: "127.0.0.1:0", MaxPDU: modbus.MaxPDU + 1}},
 		{"packetconn on tcp", ServerConfig{Network: NetworkTCP, Addr: "127.0.0.1:0", PacketConn: &fakePacketConn{}}},
+		{"listener on udp", ServerConfig{Network: NetworkUDP, Addr: "127.0.0.1:0", Listener: &fakeListener{}}},
+		{"listener on rtu-udp", ServerConfig{Network: NetworkRTUOverUDP, Addr: "127.0.0.1:0", Listener: &fakeListener{}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -282,6 +308,14 @@ func pipePort() Port {
 	_ = b.Close()
 	return a
 }
+
+// fakeListener satisfies net.Listener for validation tests without binding a
+// socket.
+type fakeListener struct{}
+
+func (*fakeListener) Accept() (net.Conn, error) { return nil, net.ErrClosed }
+func (*fakeListener) Close() error              { return nil }
+func (*fakeListener) Addr() net.Addr            { return &net.TCPAddr{} }
 
 // fakePacketConn satisfies net.PacketConn for validation tests without opening
 // a socket.

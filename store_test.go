@@ -3,6 +3,7 @@ package gmodbus
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/maxid/gnety/codec/modbus"
@@ -201,5 +202,62 @@ func TestDeviceIdentificationSplit(t *testing.T) {
 
 	if _, err := device.handle(&modbus.ReadDeviceIdentificationRequest{ReadCode: modbus.DeviceIDIndividual, ObjectID: 0x40}, modbus.MaxPDU); err == nil {
 		t.Fatal("unknown object did not fail")
+	}
+}
+
+func TestDeviceIdentificationContinuation(t *testing.T) {
+	// Two 40-byte objects fit one at a time in a 50-byte PDU, so the first
+	// response must stop with MoreFollows and the second must start at the
+	// reported object instead of restarting at object 0.
+	device := &DeviceIdentification{
+		VendorName:  strings.Repeat("V", 40),
+		ProductCode: strings.Repeat("P", 40),
+	}
+	first, err := device.handle(&modbus.ReadDeviceIdentificationRequest{ReadCode: modbus.DeviceIDBasic}, 50)
+	if err != nil {
+		t.Fatalf("first response: %v", err)
+	}
+	firstResp := first.(*modbus.ReadDeviceIdentificationResponse)
+	if !firstResp.MoreFollows || firstResp.NextObjectID != modbus.DeviceIDProductCode {
+		t.Fatalf("first response = more %v next %#x", firstResp.MoreFollows, firstResp.NextObjectID)
+	}
+	if len(firstResp.Objects) != 1 || firstResp.Objects[0].ID != modbus.DeviceIDVendorName {
+		t.Fatalf("first objects = %#v", firstResp.Objects)
+	}
+
+	second, err := device.handle(&modbus.ReadDeviceIdentificationRequest{
+		ReadCode: modbus.DeviceIDBasic,
+		ObjectID: firstResp.NextObjectID,
+	}, 300)
+	if err != nil {
+		t.Fatalf("continuation: %v", err)
+	}
+	secondResp := second.(*modbus.ReadDeviceIdentificationResponse)
+	if len(secondResp.Objects) != 1 || secondResp.Objects[0].ID != modbus.DeviceIDProductCode {
+		t.Fatalf("continuation objects = %#v, want only the product code", secondResp.Objects)
+	}
+	if secondResp.MoreFollows {
+		t.Fatal("continuation still reports more follows")
+	}
+	if secondResp.ConformityLevel != 0x81 {
+		t.Fatalf("conformity = %#x, want 0x81 for a basic read", secondResp.ConformityLevel)
+	}
+
+	// A basic read that starts past the last basic object has nothing to report.
+	if _, err := device.handle(&modbus.ReadDeviceIdentificationRequest{
+		ReadCode: modbus.DeviceIDBasic,
+		ObjectID: modbus.DeviceIDMajorMinorRevision,
+	}, modbus.MaxPDU); err == nil {
+		t.Fatal("out-of-range continuation did not fail")
+	}
+
+	// A configured conformity level overrides the implied one.
+	device.ConformityLevel = 0x03
+	legal, err := device.handle(&modbus.ReadDeviceIdentificationRequest{ReadCode: modbus.DeviceIDExtended}, modbus.MaxPDU)
+	if err != nil {
+		t.Fatalf("extended read: %v", err)
+	}
+	if got := legal.(*modbus.ReadDeviceIdentificationResponse).ConformityLevel; got != 0x03 {
+		t.Fatalf("conformity = %#x, want the configured 0x03", got)
 	}
 }

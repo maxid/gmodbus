@@ -7,13 +7,12 @@
 - [x] Function codes 0x01–0x06, 0x0F, 0x10, 0x16, 0x17 and 0x2B/0x0E
 - [x] Vendor function-code registry (typed request/response and RTU lengths)
 - [x] RTU broadcast, CRC16 and the no-CRC gateway variant
-- [x] Typed reads and writes for function codes 0x01, 0x02, 0x03, 0x04, 0x05,
-      0x06, 0x0F, 0x10
 - [x] Transaction matching, bounded retries, exception mapping
 - [x] Serialized exchanges for concurrent callers
 - [x] Metrics hook with low-cardinality result labels
 - [x] Polling runner with per-task schedules
-- [x] Pluggable dialer and connection factory (tests, TLS termination, proxies)
+- [x] Injectable transports: `Port` for the serial line, `Listener` and
+      `PacketConn` for servers
 - [x] Optional automatic recovery for long-lived pollers instead of failing with
       `ErrClosed` after a lost connection
 - [ ] Per-task scheduling jitter to spread a large task list
