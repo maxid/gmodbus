@@ -5,6 +5,8 @@ github.com/goburrow/serial v0.1.0 h1:v2T1SQa/dlUqQiYIT8+Cu7YolfqAi3K96UmhwYyuSrA
 github.com/goburrow/serial v0.1.0/go.mod h1:sAiqG0nRVswsm1C97xsttiYCzSLBmUZ/VSlVLZJ8haA=
 github.com/maxid/gnety v0.0.0-20261101063029-01d7f5b12068 h1:Z0Es1+hJ/K+HTc5c71d+xMpylXFey23vWGpIoUtEvhs=
 github.com/maxid/gnety v0.0.0-20261101063029-01d7f5b12068/go.mod h1:N56Y8M/otpHSaSmOlhtvrykr1Iud6PliOjgh5u/Bfpc=
+github.com/maxid/gnety v0.0.0-20261101072215-3fa5d9d714c6 h1:t6foiQ8h3Fci/wniBvhhTwuGPBXPZUTqh83La8tohTA=
+github.com/maxid/gnety v0.0.0-20261101072215-3fa5d9d714c6/go.mod h1:N56Y8M/otpHSaSmOlhtvrykr1Iud6PliOjgh5u/Bfpc=
 github.com/pion/dtls/v2 v2.2.12 h1:KP7H5/c1EiVAAKUmXyCzPiQe5+bCJrpOeKg/L05dunk=
 github.com/pion/dtls/v2 v2.2.12/go.mod h1:d9SYc9fch0CqK90mRk1dC7AkzzpwJj6u2GU3u+9pqFE=
 github.com/pion/logging v0.2.2 h1:M9+AIj/+pxNsDfAT64+MAVgJO0rsyLnoJKCqf//DoeY=

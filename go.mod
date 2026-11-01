@@ -3,7 +3,7 @@ module github.com/maxid/gmodbus
 go 1.27
 
 require (
-	github.com/maxid/gnety v0.0.0-20261101063029-01d7f5b12068
+	github.com/maxid/gnety v0.0.0-20261101072215-3fa5d9d714c6
 	github.com/pion/dtls/v2 v2.2.12
 	github.com/simonvetter/modbus v1.6.4
 	go.bug.st/serial v1.8.0
