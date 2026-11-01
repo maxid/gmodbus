@@ -39,7 +39,8 @@
   fallback and panics, unknown function codes, limits and idle recovery, plus
   interoperability with `github.com/simonvetter/modbus` (TCP in both directions,
   and its RTU-over-TCP/RTU-over-UDP/UDP client against this server). The interop
-  package is a test-only dependency.
+  tests live in a separate `interop` module, so the library's module graph
+  carries no third-party Modbus implementation.
 - Fixes after review: a split device-identification response continues from the
   requested object instead of restarting at the first one, and the conformity
   level follows the read code (overridable with

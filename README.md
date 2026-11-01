@@ -378,6 +378,20 @@ go run ./examples/server -addr 127.0.0.1:5020
 go run ./examples/read-holding -addr 127.0.0.1:5020 -start 0 -quantity 4
 ```
 
+## Interoperability tests
+
+The tests against an independent Modbus implementation
+(`github.com/simonvetter/modbus`) live in the separate
+[`interop`](interop/README.md) module, so this module's dependency graph carries
+no third-party Modbus implementation:
+
+```sh
+cd interop && go test ./...
+```
+
+The interop module replaces this module with the parent directory, so it always
+tests the working copy and is not published on its own.
+
 ## Scope
 
 The library covers the client and server roles and the seven transports listed

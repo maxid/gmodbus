@@ -321,6 +321,17 @@ go run ./examples/server -addr 127.0.0.1:5020
 go run ./examples/read-holding -addr 127.0.0.1:5020 -start 0 -quantity 4
 ```
 
+## 互操作测试
+
+针对独立 Modbus 实现（`github.com/simonvetter/modbus`）的测试放在独立的
+[`interop`](interop/README.md) 模块里，因此本模块的依赖图不携带任何第三方 Modbus 实现：
+
+```sh
+cd interop && go test ./...
+```
+
+interop 模块用 `replace` 指向父目录，始终测试工作副本，不单独发布。
+
 ## 范围
 
 覆盖客户端与服务端角色及上面的七种传输。明确不做：RS485 半双工回声消除、强制 RTU 3.5

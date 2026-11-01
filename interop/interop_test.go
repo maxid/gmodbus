@@ -1,4 +1,4 @@
-package gmodbus
+package interop
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/maxid/gmodbus"
 	sim "github.com/simonvetter/modbus"
 )
 
@@ -37,8 +38,8 @@ func TestInteropOurClientToTheirServer(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = srv.Stop() })
 
-	cli, err := NewClient(context.Background(), ClientConfig{
-		Network: NetworkTCP,
+	cli, err := gmodbus.NewClient(context.Background(), gmodbus.ClientConfig{
+		Network: gmodbus.NetworkTCP,
 		Addr:    fmt.Sprintf("127.0.0.1:%d", port),
 		Timeout: 2 * time.Second,
 	})
@@ -88,25 +89,30 @@ func TestInteropOurClientToTheirServer(t *testing.T) {
 func TestInteropTheirClientToOurServer(t *testing.T) {
 	cases := []struct {
 		name    string
-		network Network
+		network gmodbus.Network
 		scheme  string
 	}{
-		{"tcp", NetworkTCP, "tcp"},
-		{"udp", NetworkUDP, "udp"},
-		{"rtu-tcp", NetworkRTUOverTCP, "rtuovertcp"},
-		{"rtu-udp", NetworkRTUOverUDP, "rtuoverudp"},
+		{"tcp", gmodbus.NetworkTCP, "tcp"},
+		{"udp", gmodbus.NetworkUDP, "udp"},
+		{"rtu-tcp", gmodbus.NetworkRTUOverTCP, "rtuovertcp"},
+		{"rtu-udp", gmodbus.NetworkRTUOverUDP, "rtuoverudp"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			srv, err := NewServer(context.Background(), ServerConfig{
+			store := gmodbus.NewMemoryStore(nil)
+			unit, ok := store.Unit(1)
+			if !ok {
+				t.Fatal("the default store has no unit 1")
+			}
+			srv, err := gmodbus.NewServer(context.Background(), gmodbus.ServerConfig{
 				Network: tc.network,
 				Addr:    "127.0.0.1:0",
+				Store:   store,
 			})
 			if err != nil {
 				t.Fatalf("our server: %v", err)
 			}
 			defer func() { _ = srv.Close() }()
-			unit := srv.store.unitFor(1)
 			if err := unit.SetDiscreteInputs(0, []bool{true, false, true}); err != nil {
 				t.Fatal(err)
 			}

@@ -14,7 +14,7 @@
 - RTU 分帧与 CRC16（及去 CRC 的 `NoCRC` 网关变体）来自 `gnety/codec/modbus`；串口始终校验 CRC。内置串口用 `go.bug.st/serial`，可用 `Port` 替换（`net.Conn` 满足），测试不需要硬件。
 - 传输走 gnety 的 client/server：接受内存态 `*tls.Config`/`*dtls.Config`，客户端用 `SetDeadline` 实现单次尝试超时与取消；流传输用 `RawHandler`，数据报用 `DatagramCodec` 与 session。
 - `ServerMetrics` 低基数请求结果，另有 `MaxConnections`、`IdleTimeout`、`ShutdownTimeout`、`OnError` 与可注入的 `Listener`/`PacketConn`/`Port`。
-- 测试覆盖七种传输回环、TLS/DTLS 自签证书、`net.Pipe` 上的 RTU、广播、Handler 回落与 panic、未知功能码、限额与空闲恢复，以及与 `github.com/simonvetter/modbus` 的互操作（TCP 双向，以及对方 RTU-over-TCP/RTU-over-UDP/UDP client 对本站 server）。该包仅测试使用。
+- 测试覆盖七种传输回环、TLS/DTLS 自签证书、`net.Pipe` 上的 RTU、广播、Handler 回落与 panic、未知功能码、限额与空闲恢复，以及与 `github.com/simonvetter/modbus` 的互操作（TCP 双向，以及对方 RTU-over-TCP/RTU-over-UDP/UDP client 对本站 server）。互操作测试放在独立的 `interop` 模块，本库的依赖图不携带第三方 Modbus 实现。
 - 评审修复：设备标识分片后按请求的对象续读而不是从头重来，符合级别按 read code 推导（`DeviceIdentification.ConformityLevel` 可覆盖）；RTU 广播的坏帧不再回包；Handler context 在 `Close` 时取消，Handler panic 记为 `ServerResultError`；串口读失败后加入退避，`Close` 受 `ShutdownTimeout` 约束；广播只允许会改变状态的写功能码（0x17 被拒绝）；删除从未使用的 `ErrServerClosed`。
 
 - 新库：基于 `gnety/codec/modbus` 的 Modbus TCP master。
