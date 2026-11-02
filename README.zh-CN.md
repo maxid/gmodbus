@@ -237,6 +237,26 @@ Handler 不会把 `Close` 拖住。
 | `Metrics` | 每请求钩子 | 无，且零成本 |
 | `OnError` | 传输与 Handler 错误 | 丢弃 |
 
+## 扩展点
+
+消费方要实现的或要提供的东西都在 [`hook`](hook/)：`Handler`（应答或接管服务端请求）、
+`Metrics` 与 `ServerMetrics`（可观测性）、`Port`（已打开的串口）。根包把它们全部以类型别名
+重新导出，因此两条 import 路径是同一种类型，已有代码不用改：
+
+```go
+var h gmodbus.Handler = hook.HandlerFunc(myHandle) // 同一个类型
+```
+
+单闭包适配器：`hook.HandlerFunc`、`hook.MetricsFunc`、`hook.ServerMetricsFunc`；
+`hook.NoopMetrics`、`hook.NoopServerMetrics` 丢弃所有事件。
+
+handler 返回 `hook.ErrUnhandled` 表示交给服务端回退到 `MemoryStore`；它与
+`gmodbus.ErrUnhandled` 是同一个 sentinel，两种写法 `errors.Is` 都能匹配。
+
+要让这些能力在运行期可开关、可观测，把服务端套进插件注册表：
+[`gplugin`](https://github.com/maxid/gplugin) 的 `gplugin.NewRegistry(server)` 提供具名插件、
+三态生命周期、观察者与单品启停；本包只定义"插件能插到哪里"。
+
 ## 行为
 
 ### 事务与重试

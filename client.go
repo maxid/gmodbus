@@ -928,3 +928,11 @@ func checkFunction(req modbus.Message, pdu []byte) error {
 	}
 	return nil
 }
+
+// record reports one attempt when a hook is configured.
+func (c *Client) record(function byte, result string, start time.Time) {
+	if c.metrics == nil {
+		return
+	}
+	c.metrics.Request(function, result, time.Since(start))
+}

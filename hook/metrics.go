@@ -1,4 +1,4 @@
-package gmodbus
+package hook
 
 import "time"
 
@@ -42,14 +42,6 @@ type NoopMetrics struct{}
 // Request implements Metrics.
 func (NoopMetrics) Request(byte, string, time.Duration) {}
 
-// record reports one attempt when a hook is configured.
-func (c *Client) record(function byte, result string, start time.Time) {
-	if c.metrics == nil {
-		return
-	}
-	c.metrics.Request(function, result, time.Since(start))
-}
-
 // Server result labels handed to ServerMetrics.Request.
 const (
 	// ServerResultOK is a request the server answered normally.
@@ -79,3 +71,19 @@ type NoopServerMetrics struct{}
 
 // Request implements ServerMetrics.
 func (NoopServerMetrics) Request(byte, string, time.Duration) {}
+
+// MetricsFunc adapts a function to Metrics, so a one-closure hook needs no named type.
+type MetricsFunc func(function byte, result string, d time.Duration)
+
+// Request implements Metrics.
+func (f MetricsFunc) Request(function byte, result string, d time.Duration) {
+	f(function, result, d)
+}
+
+// ServerMetricsFunc adapts a function to ServerMetrics.
+type ServerMetricsFunc func(function byte, result string, d time.Duration)
+
+// Request implements ServerMetrics.
+func (f ServerMetricsFunc) Request(function byte, result string, d time.Duration) {
+	f(function, result, d)
+}

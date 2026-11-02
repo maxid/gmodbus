@@ -276,6 +276,30 @@ individual access is supported); set `ConformityLevel` to override it.
 | `Metrics` | per-request hook | none, and it costs nothing |
 | `OnError` | transport and handler errors | discard |
 
+## Extension points
+
+Everything a consumer implements or supplies lives in [`hook`](hook/): `Handler` (answer or
+take over server requests), `Metrics` and `ServerMetrics` (observability), and `Port` (an
+already-open serial line). The root package re-exports every one of them as an alias, so the
+two import paths are the same types and existing code needs no change:
+
+```go
+var h gmodbus.Handler = hook.HandlerFunc(myHandle) // literally the same type
+```
+
+One-closure adapters: `hook.HandlerFunc`, `hook.MetricsFunc`, `hook.ServerMetricsFunc`;
+`hook.NoopMetrics` and `hook.NoopServerMetrics` drop every event.
+
+Returning `hook.ErrUnhandled` from a handler asks the server to fall back to the
+`MemoryStore`; it is the same sentinel as `gmodbus.ErrUnhandled`, so `errors.Is` matches
+either spelling.
+
+To make these switchable at run time — start, stop, inspect — wrap the server in a plugin
+registry: `gplugin.NewRegistry(server)` from
+[`gplugin`](https://github.com/maxid/gplugin) gives named plugins, a three-state lifecycle,
+an observer and per-plugin start/stop; this package only defines what a plugin can plug
+into.
+
 ## Behaviour
 
 ### Transactions and retries

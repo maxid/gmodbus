@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### 变更
+
+- **扩展契约移到 `gmodbus/hook`。** `Handler`、`HandlerFunc`、`Metrics`、`ServerMetrics`、
+  `Port`、`Result*`/`ServerResult*` 标签与 `ErrUnhandled` sentinel 定义在该包，根包以类型别名
+  重新导出，因此已有的 import、名称与 `errors.Is` 判断全部照旧。契约从两个实现文件的一节变成
+  单独可评审的目录，且 `gmodbus/hook` 不 import 根包。
+
+### 新增
+
+- `hook.MetricsFunc` 与 `hook.ServerMetricsFunc`：一个闭包即可当钩子，不必起名字类型。
+
 - **破坏性变更：**统一入口 `NewClient(ctx, ClientConfig)` 取代 `Dial`/`Config`；客户端按 `Network` 支持 TCP、TLS、UDP、DTLS、串口 RTU、RTU over TCP 与 RTU over UDP。`ErrTransactionMismatch` 改为 `ErrResponseMismatch`，因为 RTU 应答按 unit id 与功能码匹配，没有 transaction id。
 - 新增服务端：`NewServer(ctx, ServerConfig)` 提供同样七种传输。`Handler` 优先，`MemoryStore` 按 unit 应答标准功能码，`DeviceIdentification` 应答 0x2B/0x0E。RTU unit 0 是广播：写生效不回包，读被拒绝；Handler panic 恢复为 `ServerDeviceFailure`。
 - 新增 `MemoryStore`：每个 unit 独立的线圈、离散输入、保持寄存器、输入寄存器，按 `UnitConfig` 定容、懒创建，`OnWrite` 在锁外回调。

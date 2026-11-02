@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **The extension contracts moved to `gmodbus/hook`.** `Handler`, `HandlerFunc`, `Metrics`,
+  `ServerMetrics`, `Port`, the `Result*`/`ServerResult*` labels and the `ErrUnhandled`
+  sentinel are defined there and re-exported by the root package as aliases, so every
+  existing import, name and `errors.Is` check keeps working. The contracts now form one
+  reviewable directory, and `gmodbus/hook` imports nothing from the root package.
+
+### Added
+
+- `hook.MetricsFunc` and `hook.ServerMetricsFunc`: a one-closure hook needs no named type.
+
 - **Breaking:** the unified `NewClient(ctx, ClientConfig)` entry point replaces
   `Dial`/`Config`; the client supports TCP, TLS, UDP, DTLS, serial RTU, RTU over
   TCP and RTU over UDP, selected by `Network`. `ErrTransactionMismatch` is now

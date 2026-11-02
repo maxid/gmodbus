@@ -206,13 +206,6 @@ func TestServerMetricsOnPanic(t *testing.T) {
 	}
 }
 
-// ServerMetricsFunc adapts a function to ServerMetrics.
-type ServerMetricsFunc func(byte, string, time.Duration)
-
-func (f ServerMetricsFunc) Request(function byte, result string, d time.Duration) {
-	f(function, result, d)
-}
-
 func TestServerMaxConnections(t *testing.T) {
 	srv := newTestServer(t, func(cfg *ServerConfig) { cfg.MaxConnections = 1 })
 	first := newTestClient(t, srv.Addr(), nil)
