@@ -99,6 +99,14 @@
   non-interleaved concurrent callers, poller scheduling, metrics, reconnect
   recovery and give-up, close during backoff, bounded/jittered backoff, TLS with
   a test-generated certificate, and custom dialers.
+- Fuzz targets for the two parsers a peer controls: `FuzzDecodeADU` feeds
+  arbitrary bytes to the client's stream decoder in both framings (MBAP and
+  CRC-framed RTU) and pins "no panic, a rejected frame yields no message, an
+  accepted one re-encodes to the exact bytes it came from, and a one-register
+  read never decodes more than one register"; `FuzzDecodePDU` dispatches
+  arbitrary PDUs through the server and pins that every answer carries the
+  request's function code or its exception form and can be encoded. CI runs each
+  for ten seconds.
 - Examples: `examples/serial-server` runs an RTU slave and an RTU master against
   each other over loopback TCP or a socat pseudo-terminal pair, which is how the
   RTU paths are exercised with no serial device attached. `read-holding` and
@@ -108,6 +116,10 @@
 
 ### Fixed
 
+- A request whose function code already carries the exception bit (0x83) is
+  answered with a legal IllegalFunction exception instead of an unencodable one
+  that dropped the connection: the base code is what an exception frame stores,
+  and the encoder sets the bit.
 - A serial line opened with `SerialConfig.StopBits` at `OneStopBit` (the default)
   asked the driver for **two** stop bits, and `TwoStopBits` was rejected as
   invalid. The public type counts the bits while `go.bug.st/serial` enumerates

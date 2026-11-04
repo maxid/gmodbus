@@ -41,3 +41,20 @@ jobs:
           go-version: '1.27.x'
       - name: Test with the race detector
         run: go test -race ./...
+
+  # A short fuzz run over the two parsers a peer controls: the ADU the master
+  # decodes (MBAP and CRC-framed RTU) and the PDU the server dispatches. Ten
+  # seconds each catches the cheap crashes — index out of range, unbounded
+  # allocation, a frame that decodes but does not re-encode — without turning CI
+  # into a fuzzing farm; a longer run is a local or nightly job.
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+      - name: Fuzz the application data unit
+        run: go test . -run '^$' -fuzz FuzzDecodeADU -fuzztime 10s
+      - name: Fuzz the PDU
+        run: go test . -run '^$' -fuzz FuzzDecodePDU -fuzztime 10s
