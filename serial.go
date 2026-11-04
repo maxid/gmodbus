@@ -59,12 +59,24 @@ func openSerialPort(path string, cfg SerialConfig) (Port, error) {
 		BaudRate: cfg.Baud,
 		DataBits: cfg.DataBits,
 		Parity:   serialParity(cfg.Parity),
-		StopBits: serial.StopBits(cfg.StopBits),
+		StopBits: serialStopBits(cfg.StopBits),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("gmodbus: open serial %s: %w", path, err)
 	}
 	return &serialPort{port: port}, nil
+}
+
+// serialStopBits maps the public stop-bit count to the serial package's
+// identifiers. The two spellings differ in kind: this package counts the bits
+// (1 or 2), while go.bug.st/serial enumerates them (OneStopBit is 0,
+// TwoStopBits is 1), so a direct cast would ask for two stop bits whenever the
+// caller wants one, and reject TwoStopBits as invalid.
+func serialStopBits(stop StopBits) serial.StopBits {
+	if stop == TwoStopBits {
+		return serial.TwoStopBits
+	}
+	return serial.OneStopBit
 }
 
 // serialParity maps the public parity values to the serial package's.
