@@ -46,7 +46,7 @@ func (s *Server) serveStream(conn net.Conn) {
 		}
 		req, err := s.readStreamRequest(reader)
 		if err != nil {
-			if !s.isClosed() && !isTimeout(err) {
+			if !s.isClosed() && !isTimeout(err) && !isDisconnect(err) {
 				s.reportError(fmt.Errorf("gmodbus: read request: %w", err))
 			}
 			return
@@ -279,4 +279,14 @@ func isTimeout(err error) bool {
 	}
 	var netErr net.Error
 	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+// isDisconnect reports whether a stream read ended because the peer went away:
+// a clean end at a message boundary (io.EOF) or a frame cut off mid-way
+// (wire.ErrIncomplete). A client that closes its connection is normal
+// operation, and there is nothing to answer either way, so neither is worth an
+// OnError callback. A frame that arrives complete but wrong is still an error:
+// that is a broken implementation, not a departure.
+func isDisconnect(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, wire.ErrIncomplete)
 }

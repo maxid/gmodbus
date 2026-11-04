@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -321,3 +322,62 @@ func (*fakePacketConn) LocalAddr() net.Addr                    { return &net.UDP
 func (*fakePacketConn) SetDeadline(time.Time) error            { return nil }
 func (*fakePacketConn) SetReadDeadline(time.Time) error        { return nil }
 func (*fakePacketConn) SetWriteDeadline(time.Time) error       { return nil }
+
+// TestStreamDisconnectIsNotReported checks that a client which closes its
+// connection — at a frame boundary or in the middle of a frame — does not reach
+// OnError, while a frame that arrives complete and malformed still does. The
+// second half is the control: without it, a server that simply stopped reading
+// would pass the first.
+func TestStreamDisconnectIsNotReported(t *testing.T) {
+	reported := make(chan error, 4)
+	srv := newTestServer(t, func(cfg *ServerConfig) {
+		cfg.OnError = func(err error) {
+			select {
+			case reported <- err:
+			default:
+			}
+		}
+	})
+
+	// A partial MBAP header, then the socket closes: the frame never completes.
+	partial, err := net.Dial("tcp", srv.Addr())
+	if err != nil {
+		t.Fatalf("dial partial: %v", err)
+	}
+	if _, err := partial.Write([]byte{0x00, 0x01, 0x00}); err != nil {
+		t.Fatalf("write partial frame: %v", err)
+	}
+	_ = partial.Close()
+
+	// Nothing at all, then close: a clean EOF at a frame boundary.
+	silent, err := net.Dial("tcp", srv.Addr())
+	if err != nil {
+		t.Fatalf("dial silent: %v", err)
+	}
+	_ = silent.Close()
+
+	select {
+	case err := <-reported:
+		t.Fatalf("OnError got %v for a client that just disconnected", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// Control: a complete frame with a protocol id that is not Modbus is a broken
+	// peer, not a departure, and must still be reported.
+	broken, err := net.Dial("tcp", srv.Addr())
+	if err != nil {
+		t.Fatalf("dial broken: %v", err)
+	}
+	defer func() { _ = broken.Close() }()
+	if _, err := broken.Write([]byte{0x00, 0x01, 0x00, 0xff, 0x00, 0x02, 0x01, 0x03}); err != nil {
+		t.Fatalf("write malformed frame: %v", err)
+	}
+	select {
+	case err := <-reported:
+		if !strings.Contains(err.Error(), "read request") {
+			t.Fatalf("OnError got %v, want a read request error", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnError was not called for a malformed frame")
+	}
+}
