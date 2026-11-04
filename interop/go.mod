@@ -6,6 +6,7 @@ module github.com/maxid/gmodbus/interop
 go 1.27
 
 require (
+	github.com/creack/pty v1.1.24
 	github.com/maxid/gmodbus v0.0.0
 	github.com/simonvetter/modbus v1.6.4
 )

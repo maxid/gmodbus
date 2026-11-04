@@ -99,6 +99,13 @@
   non-interleaved concurrent callers, poller scheduling, metrics, reconnect
   recovery and give-up, close during backoff, bounded/jittered backoff, TLS with
   a test-generated certificate, and custom dialers.
+- The interoperability matrix gained its integration layer, behind
+  `-tags=integration` in the `interop` module: pymodbus, the reference Python
+  stack, as a slave in a container for our client and as a client against our
+  server, plus RTU over a bridged pseudo-terminal pair (two pty pairs, no
+  hardware). The image is built from `interop/docker/pymodbus` on first use and
+  every case skips when no Docker daemon answers; the existing in-process matrix
+  against `github.com/simonvetter/modbus` still runs in the default suite.
 - Fuzz targets for the two parsers a peer controls: `FuzzDecodeADU` feeds
   arbitrary bytes to the client's stream decoder in both framings (MBAP and
   CRC-framed RTU) and pins "no panic, a rejected frame yields no message, an
@@ -107,6 +114,9 @@
   arbitrary PDUs through the server and pins that every answer carries the
   request's function code or its exception form and can be encoded. CI runs each
   for ten seconds.
+- CI gained the `integration` job (the reference implementations and the serial
+  link) next to the existing `race` and `fuzz` ones, so the four gates of the
+  research baseline are all run by the workflow.
 - Examples: `examples/serial-server` runs an RTU slave and an RTU master against
   each other over loopback TCP or a socat pseudo-terminal pair, which is how the
   RTU paths are exercised with no serial device attached. `read-holding` and

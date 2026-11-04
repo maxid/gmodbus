@@ -401,13 +401,16 @@ flags worth copying and the output to expect.
 
 ## Interoperability tests
 
-The tests against an independent Modbus implementation
-(`github.com/simonvetter/modbus`) live in the separate
-[`interop`](interop/README.md) module, so this module's dependency graph carries
-no third-party Modbus implementation:
+The matrix against implementations that are not this library lives in the
+separate [`interop`](interop/README.md) module, so this module's dependency graph
+carries no third-party Modbus implementation and no container toolkit. The
+default layer is the Go implementation `github.com/simonvetter/modbus` in both
+directions; the integration layer is pymodbus (the reference Python stack) in a
+container on both sides, plus RTU over a bridged pseudo-terminal pair:
 
 ```sh
-cd interop && go test ./...
+cd interop && go test ./...                    # another Go implementation, no Docker
+cd interop && go test -tags=integration ./...  # pymodbus in a container, and the serial path
 ```
 
 The interop module replaces this module with the parent directory, so it always

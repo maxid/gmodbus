@@ -40,7 +40,9 @@
 - 内置 dialer 的 `TLS`：handshake 受 `DialTimeout` 约束，失败分类为 `ErrTLSConfig`（永久）或 `ErrTLSHandshake`（瞬时）。
 - `Dialer` 支持自定义 transport（TLS、proxy、test double），优先于 `TLS` 并拥有连接。
 - 基于 codec 的进程内 fake Modbus TCP server 测试：每个操作的请求解码断言、exception 映射、timeout 重试、重试耗尽、transaction/unit mismatch、关闭 client、并发调用不交错、poller 调度、metrics、reconnect 恢复与放弃、backoff 中 close、有界抖动退避、测试证书 TLS、自定义 dialer。
+- 互操作矩阵补上集成层（`interop` 模块的 `-tags=integration`）：pymodbus（Python 参考实现）在容器里当从站给我们的客户端用、也当客户端打我们的服务端；另有对接伪终端对的 RTU 串口路径（两对 pty，不需要硬件）。镜像首次使用时从 `interop/docker/pymodbus` 构建，Docker 不可用时逐例 skip；原有对 `github.com/simonvetter/modbus` 的进程内矩阵仍在默认套件里。
 - 两个解析入口的 fuzz：`FuzzDecodeADU` 把任意字节喂给客户端流式解码器（MBAP 与 CRC 帧 RTU 两种分帧），钉住“不 panic、被拒的帧不产出消息、被接受的帧重编码后与来源字节一致、读 1 个寄存器的请求解不出多于 1 个寄存器”；`FuzzDecodePDU` 把任意 PDU 送进服务端分派，钉住“应答必然带请求的功能码或其异常形式、且能编码”。CI 各跑 10 秒。
+- CI 在 `race`、`fuzz` 之外再加 `integration` 作业（参考实现与串口链路），研发基线的四道闸全部由工作流跑起来。
 - 示例：`examples/serial-server` 让一个 RTU 从站与一个 RTU 主站互相对打（回环 TCP，或 socat 伪终端对），这是没有串口设备时验证 RTU 路径的做法。`read-holding` 与 `server` 统一了约定——`-h` 给出可复制命令、`[n/N]` 步骤、`[done]`、Ctrl-C 打 `[stop]` 且退出码 0——并新增 `examples/README.md`（含中文版）说明每个示例回答什么问题。
 
 ### 修复

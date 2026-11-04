@@ -339,11 +339,14 @@ go run ./examples/serial-server
 
 ## 互操作测试
 
-针对独立 Modbus 实现（`github.com/simonvetter/modbus`）的测试放在独立的
-[`interop`](interop/README.md) 模块里，因此本模块的依赖图不携带任何第三方 Modbus 实现：
+对“不是本库”的实现的互操作矩阵放在独立的 [`interop`](interop/README.md) 模块里，
+因此本模块的依赖图既不携带第三方 Modbus 实现，也不携带容器工具链。默认层是 Go 实现
+`github.com/simonvetter/modbus` 的双向测试；集成层是容器里的 pymodbus（Python 参考实现）
+双向测试，加上对接伪终端对的 RTU 串口路径：
 
 ```sh
-cd interop && go test ./...
+cd interop && go test ./...                    # 另一个 Go 实现，不需要 Docker
+cd interop && go test -tags=integration ./...  # 容器里的 pymodbus，以及串口路径
 ```
 
 interop 模块用 `replace` 指向父目录，始终测试工作副本，不单独发布。
