@@ -432,6 +432,8 @@ command line tool.
 - [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md): serial parameters, the timeout and
   retry budget, gateway configurations and the failure modes met first in the
   field.
+- [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md): the committed benchmarks, their
+  numbers on one machine, and why the wire, not the library, costs the time.
 - [`examples/README.md`](examples/README.md): what each example answers.
 - [`interop/README.md`](interop/README.md): the interoperability matrix and what
   each layer needs to run.

@@ -363,6 +363,8 @@ interop 模块用 `replace` 指向父目录，始终测试工作副本，不单�
   服务端状态机，以及一个新功能码该落在哪。
 - [`docs/DEPLOYMENT.zh-CN.md`](docs/DEPLOYMENT.zh-CN.md)：串口参数、超时与重试预算、网关
   配置，以及现场最先遇到的失败模式。
+- [`docs/PERFORMANCE.zh-CN.md`](docs/PERFORMANCE.zh-CN.md)：已入库的基准、一台机器上的数字，
+  以及为什么花时间的是线路而不是库。
 - [`examples/README.zh-CN.md`](examples/README.zh-CN.md)：每个示例回答什么问题。
 - [`interop/README.zh-CN.md`](interop/README.zh-CN.md)：互操作矩阵与每层运行的前提。
 

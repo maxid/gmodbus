@@ -117,6 +117,12 @@
 - CI gained the `integration` job (the reference implementations and the serial
   link) next to the existing `race` and `fuzz` ones, so the four gates of the
   research baseline are all run by the workflow.
+- Benchmarks for the two costs a deployment cares about: `BenchmarkReadHolding`
+  (4 and 125 registers) and `BenchmarkWriteSingleRegister` over a real loopback
+  TCP connection with the in-process server, and `BenchmarkRTUFrame`
+  (encode/decode) for the framing alone. `docs/PERFORMANCE.md` records their
+  numbers on one machine, what they do and do not mean, and a template for
+  real-device results — none were taken against hardware.
 - `docs/` exists: `ARCHITECTURE.md` (package map, the three transport families,
   the client and server state machines, the wire boundary with gnety, and where
   a new function code belongs) and `DEPLOYMENT.md` (serial parameters, the
