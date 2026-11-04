@@ -21,20 +21,41 @@ import (
 // back to bytes unchanged, and every server response answers the request it was
 // given.
 
-// fuzzPending is the request the ADU decoder is waiting for: one holding
-// register, so a successful response has exactly one register and a fixed
-// canonical encoding.
-func fuzzPending() modbus.Message {
+// fuzzReadPending is the read every ADU seed is built around: one holding
+// register, so a successful response has exactly one register.
+func fuzzReadPending() modbus.Message {
 	return &modbus.ReadHoldingRegistersRequest{Address: 0, Quantity: 1}
 }
 
-// newFuzzStreamCodec returns a client stream codec with that request pending.
-// Both framings are exercised: MBAP for the network transports and the
+// fuzzPendings are the requests the ADU decoder is set up to answer, so the
+// target covers a response with a payload and both acknowledgement forms: a
+// read, a single write and a multiple write. Each answer has a canonical
+// encoding, which is what makes the idempotence check meaningful.
+func fuzzPendings() []modbus.Message {
+	return []modbus.Message{
+		fuzzReadPending(),
+		&modbus.WriteSingleRegister{Address: 2, Value: 0x1234},
+		&modbus.WriteMultipleCoilsRequest{Address: 4, Values: []bool{true, false, true}},
+	}
+}
+
+// newFuzzStreamCodec returns a client stream codec with pending awaiting a
+// response. Both framings are exercised: MBAP for the network transports and the
 // CRC-framed RTU form for the serial family.
-func newFuzzStreamCodec(rtuMode bool) *streamCodec {
+func newFuzzStreamCodec(rtuMode bool, pending modbus.Message) *streamCodec {
 	codec := &streamCodec{rtuMode: rtuMode, maxPDU: modbus.MaxPDU}
-	codec.setPending(1, 7, fuzzPending())
+	codec.setPending(1, 7, pending)
 	return codec
+}
+
+// mustRTU frames a PDU as a CRC-framed RTU frame, for the seed corpus.
+func mustRTU(f *testing.F, pdu []byte) []byte {
+	f.Helper()
+	raw, err := modbus.RTUOptions{}.Marshal(modbus.RTUFrame{UnitID: 1, PDU: pdu})
+	if err != nil {
+		f.Fatalf("seed the RTU frame %x: %v", pdu, err)
+	}
+	return raw
 }
 
 // FuzzDecodeADU feeds arbitrary bytes to the client's stream decoder in both
@@ -48,76 +69,68 @@ func FuzzDecodeADU(f *testing.F) {
 	f.Add([]byte{0x00, 0x07, 0x00, 0x00, 0xff, 0xff, 0x01, 0x03})
 	f.Add([]byte{0x00, 0x08, 0x00, 0x00, 0x00, 0x05, 0x01, 0x03, 0x02, 0x12, 0x34})
 	f.Add([]byte{0x00, 0x07, 0x00, 0x00, 0x00, 0x05, 0x02, 0x03, 0x02, 0x12, 0x34})
+	// The acknowledgement forms: a write-single echo and a write-multiple ack,
+	// which carry no payload and are checked against the pending request instead.
+	f.Add([]byte{0x00, 0x07, 0x00, 0x00, 0x00, 0x06, 0x01, 0x06, 0x00, 0x02, 0x12, 0x34})
+	f.Add([]byte{0x00, 0x07, 0x00, 0x00, 0x00, 0x06, 0x01, 0x0f, 0x00, 0x04, 0x00, 0x03})
 
-	// RTU: the same answer and exception frames with a valid CRC16, the same
-	// answer with a corrupted checksum, and a truncated frame.
-	valid, err := modbus.RTUOptions{}.Marshal(modbus.RTUFrame{
-		UnitID: 1,
-		PDU:    []byte{0x03, 0x02, 0x12, 0x34},
-	})
-	if err != nil {
-		f.Fatalf("seed the RTU answer: %v", err)
-	}
+	// RTU: the same answers with a valid CRC16, the same answer with a corrupted
+	// checksum, and a truncated frame.
+	valid := mustRTU(f, []byte{0x03, 0x02, 0x12, 0x34})
 	f.Add(valid)
 	f.Add(valid[:len(valid)-3])
 	corrupt := append([]byte(nil), valid...)
 	corrupt[len(corrupt)-1] ^= 0xff
 	f.Add(corrupt)
-	exception, err := modbus.RTUOptions{}.Marshal(modbus.RTUFrame{
-		UnitID: 1,
-		PDU:    []byte{0x83, 0x02},
-	})
-	if err != nil {
-		f.Fatalf("seed the RTU exception: %v", err)
-	}
-	f.Add(exception)
+	f.Add(mustRTU(f, []byte{0x83, 0x02}))
+	f.Add(mustRTU(f, []byte{0x06, 0x00, 0x02, 0x12, 0x34}))
+	f.Add(mustRTU(f, []byte{0x0f, 0x00, 0x04, 0x00, 0x03}))
 	f.Add([]byte{})
 	f.Add([]byte{0x01})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		for _, rtuMode := range []bool{false, true} {
-			codec := newFuzzStreamCodec(rtuMode)
-			reader := bufio.NewReader(bytes.NewReader(data))
-			value, err := codec.Decode(reader)
-			if err != nil {
-				// A rejected frame must not also produce a message.
-				if value != nil {
-					t.Fatalf("rtu=%v: Decode returned %v with error %v", rtuMode, value, err)
+		for _, pending := range fuzzPendings() {
+			for _, rtuMode := range []bool{false, true} {
+				codec := newFuzzStreamCodec(rtuMode, pending)
+				reader := bufio.NewReader(bytes.NewReader(data))
+				value, err := codec.Decode(reader)
+				if err != nil {
+					// A rejected frame must not also produce a message.
+					if value != nil {
+						t.Fatalf("%T rtu=%v: Decode returned %v with error %v", pending, rtuMode, value, err)
+					}
+					continue
 				}
-				continue
-			}
-			msg, ok := value.(modbus.Message)
-			if !ok || msg == nil {
-				t.Fatalf("rtu=%v: Decode returned %T, not a modbus message", rtuMode, value)
-			}
-			// The pending request was a one-register read, so the only accepted
-			// answers are that read and its exception form, and the read must carry
-			// exactly the requested register: a peer cannot make the decoder
-			// allocate more than the request allows.
-			switch decoded := msg.(type) {
-			case *modbus.ReadHoldingRegistersResponse:
-				if len(decoded.Registers) != 1 {
-					t.Fatalf("rtu=%v: a one-register read decoded %d registers", rtuMode, len(decoded.Registers))
+				msg, ok := value.(modbus.Message)
+				if !ok || msg == nil {
+					t.Fatalf("%T rtu=%v: Decode returned %T, not a modbus message", pending, rtuMode, value)
 				}
-			case *modbus.Exception:
-				// Any code byte decodes; mapping a code to a device error is the
-				// client's job, not the decoder's.
-			default:
-				t.Fatalf("rtu=%v: decoded %T, which answers no one-register read", rtuMode, msg)
-			}
-			// Idempotence: encoding the message again reproduces the frame that was
-			// consumed, byte for byte. Decoding is canonicalizing, never lossy.
-			var pdu bytes.Buffer
-			if err := modbus.EncodePDU(&pdu, msg); err != nil {
-				t.Fatalf("rtu=%v: re-encode %T: %v", rtuMode, msg, err)
-			}
-			frame, err := codec.encode(clientFrame{unit: 1, txID: 7, pdu: pdu.Bytes()})
-			if err != nil {
-				t.Fatalf("rtu=%v: re-frame %T: %v", rtuMode, msg, err)
-			}
-			consumed := len(data) - reader.Buffered()
-			if !bytes.Equal(frame, data[:consumed]) {
-				t.Fatalf("rtu=%v: decoded %T re-encodes to %x, the frame was %x", rtuMode, msg, frame, data[:consumed])
+				// The only answers it may accept are the pending request's own
+				// function code and its exception form.
+				want := pending.Function()
+				if got := msg.Function(); got != want && got != want|0x80 {
+					t.Fatalf("%T rtu=%v: decoded function %#02x for a %#02x request", pending, rtuMode, got, want)
+				}
+				// A read answer carries exactly the requested quantity: a peer cannot
+				// make the decoder allocate more than the request allows.
+				if read, isRead := msg.(*modbus.ReadHoldingRegistersResponse); isRead && len(read.Registers) != 1 {
+					t.Fatalf("%T rtu=%v: a one-register read decoded %d registers", pending, rtuMode, len(read.Registers))
+				}
+				// Idempotence: encoding the message again reproduces the frame that
+				// was consumed, byte for byte. Decoding is canonicalizing, never lossy.
+				var pdu bytes.Buffer
+				if err := modbus.EncodePDU(&pdu, msg); err != nil {
+					t.Fatalf("%T rtu=%v: re-encode %T: %v", pending, rtuMode, msg, err)
+				}
+				frame, err := codec.encode(clientFrame{unit: 1, txID: 7, pdu: pdu.Bytes()})
+				if err != nil {
+					t.Fatalf("%T rtu=%v: re-frame %T: %v", pending, rtuMode, msg, err)
+				}
+				consumed := len(data) - reader.Buffered()
+				if !bytes.Equal(frame, data[:consumed]) {
+					t.Fatalf("%T rtu=%v: decoded %T re-encodes to %x, the frame was %x",
+						pending, rtuMode, msg, frame, data[:consumed])
+				}
 			}
 		}
 	})
@@ -226,7 +239,7 @@ func TestADURefusesCorruptedFraming(t *testing.T) {
 	} {
 		t.Run("rtu "+name, func(t *testing.T) {
 			frame := mutate(append([]byte(nil), valid...))
-			if _, err := newFuzzStreamCodec(true).Decode(bufio.NewReader(bytes.NewReader(frame))); err == nil {
+			if _, err := newFuzzStreamCodec(true, fuzzReadPending()).Decode(bufio.NewReader(bytes.NewReader(frame))); err == nil {
 				t.Fatalf("a %s-corrupted RTU frame was accepted: %x", name, frame)
 			}
 		})
@@ -235,12 +248,12 @@ func TestADURefusesCorruptedFraming(t *testing.T) {
 	// A peer that declares more than MaxPDU must be refused without the reader
 	// reserving the declared size.
 	huge := []byte{0x00, 0x07, 0x00, 0x00, 0xff, 0xff, 0x01, 0x03, 0x02}
-	if _, err := newFuzzStreamCodec(false).Decode(bufio.NewReader(bytes.NewReader(huge))); err == nil {
+	if _, err := newFuzzStreamCodec(false, fuzzReadPending()).Decode(bufio.NewReader(bytes.NewReader(huge))); err == nil {
 		t.Fatal("an MBAP frame declaring 65535 bytes was accepted")
 	}
 	// A peer that ends the stream mid-frame is a disconnect, not a message.
 	short := []byte{0x00, 0x07, 0x00, 0x00, 0x00, 0x05, 0x01, 0x03, 0x02}
-	if _, err := newFuzzStreamCodec(false).Decode(bufio.NewReader(bytes.NewReader(short))); err == nil {
+	if _, err := newFuzzStreamCodec(false, fuzzReadPending()).Decode(bufio.NewReader(bytes.NewReader(short))); err == nil {
 		t.Fatal("an MBAP frame that ends mid-PDU was accepted")
 	}
 }

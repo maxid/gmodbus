@@ -110,7 +110,9 @@
   arbitrary bytes to the client's stream decoder in both framings (MBAP and
   CRC-framed RTU) and pins "no panic, a rejected frame yields no message, an
   accepted one re-encodes to the exact bytes it came from, and a one-register
-  read never decodes more than one register"; `FuzzDecodePDU` dispatches
+  read never decodes more than one register", with a pending read, a pending
+  single write and a pending multiple write so both acknowledgement forms are
+  covered; `FuzzDecodePDU` dispatches
   arbitrary PDUs through the server and pins that every answer carries the
   request's function code or its exception form and can be encoded. CI runs each
   for ten seconds.
