@@ -325,21 +325,17 @@ sentinel 都是包装返回，用 `errors.Is` 判断；异常用 `errors.As` 取
 
 ## 示例
 
-[`examples/read-holding`](examples/read-holding/main.go) 按 `-network` 与 `-addr` 读取
-保持寄存器：
+三个可运行的程序：`server` 提供一台带初值的设备，`read-holding` 在七种传输上读一段寄存器，
+`serial-server` 在没有串口设备时验证 RTU 那几条路径。
 
 ```sh
-go run ./examples/read-holding -addr 192.0.2.10:502
-go run ./examples/read-holding -network rtu-tcp -addr 127.0.0.1:5020 -unit 1 -start 0 -quantity 4
+go run ./examples/server
+go run ./examples/read-holding
+go run ./examples/serial-server
 ```
 
-[`examples/server`](examples/server/main.go) 启动一个带初始寄存器区的 Modbus TCP 服务端，
-并打印每次写入：
-
-```sh
-go run ./examples/server -addr 127.0.0.1:5020
-go run ./examples/read-holding -addr 127.0.0.1:5020 -start 0 -quantity 4
-```
+每个示例回答什么问题、哪些参数值得复制、应该看到什么，见
+[`examples/README.zh-CN.md`](examples/README.zh-CN.md)。
 
 ## 互操作测试
 

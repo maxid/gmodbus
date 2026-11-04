@@ -386,21 +386,18 @@ Neither hook carries a unit, address or value, by design.
 
 ## Examples
 
-[`examples/read-holding`](examples/read-holding/main.go) reads holding registers
-from the device given by `-network` and `-addr`:
+Three runnable programs: `server` serves a seeded device, `read-holding` reads a
+block of registers over any of the seven transports, and `serial-server`
+exercises the RTU paths with no serial device attached.
 
 ```sh
-go run ./examples/read-holding -addr 192.0.2.10:502
-go run ./examples/read-holding -network rtu-tcp -addr 127.0.0.1:5020 -unit 1 -start 0 -quantity 4
+go run ./examples/server
+go run ./examples/read-holding
+go run ./examples/serial-server
 ```
 
-[`examples/server`](examples/server/main.go) runs a Modbus TCP server with a
-seeded register map and logs every write:
-
-```sh
-go run ./examples/server -addr 127.0.0.1:5020
-go run ./examples/read-holding -addr 127.0.0.1:5020 -start 0 -quantity 4
-```
+See [`examples/README.md`](examples/README.md) for what each one answers, the
+flags worth copying and the output to expect.
 
 ## Interoperability tests
 

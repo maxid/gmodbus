@@ -99,3 +99,21 @@
   non-interleaved concurrent callers, poller scheduling, metrics, reconnect
   recovery and give-up, close during backoff, bounded/jittered backoff, TLS with
   a test-generated certificate, and custom dialers.
+- Examples: `examples/serial-server` runs an RTU slave and an RTU master against
+  each other over loopback TCP or a socat pseudo-terminal pair, which is how the
+  RTU paths are exercised with no serial device attached. `read-holding` and
+  `server` now share one convention — `-h` with copyable commands, `[n/N]`
+  steps, `[done]`, a `[stop]` line on Ctrl-C and exit code 0 — and
+  `examples/README.md` (with a Chinese edition) says what each one answers.
+
+### Fixed
+
+- A serial line opened with `SerialConfig.StopBits` at `OneStopBit` (the default)
+  asked the driver for **two** stop bits, and `TwoStopBits` was rejected as
+  invalid. The public type counts the bits while `go.bug.st/serial` enumerates
+  them, so the value has to be mapped, not cast.
+- A client that closes its connection no longer reaches `OnError`: an end at a
+  frame boundary (`io.EOF`) or in the middle of a frame (`wire.ErrIncomplete`)
+  is a disconnect, not a server fault, and half the log lines of a busy server
+  used to be those. A frame that arrives complete and malformed is still
+  reported.

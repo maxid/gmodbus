@@ -40,3 +40,9 @@
 - 内置 dialer 的 `TLS`：handshake 受 `DialTimeout` 约束，失败分类为 `ErrTLSConfig`（永久）或 `ErrTLSHandshake`（瞬时）。
 - `Dialer` 支持自定义 transport（TLS、proxy、test double），优先于 `TLS` 并拥有连接。
 - 基于 codec 的进程内 fake Modbus TCP server 测试：每个操作的请求解码断言、exception 映射、timeout 重试、重试耗尽、transaction/unit mismatch、关闭 client、并发调用不交错、poller 调度、metrics、reconnect 恢复与放弃、backoff 中 close、有界抖动退避、测试证书 TLS、自定义 dialer。
+- 示例：`examples/serial-server` 让一个 RTU 从站与一个 RTU 主站互相对打（回环 TCP，或 socat 伪终端对），这是没有串口设备时验证 RTU 路径的做法。`read-holding` 与 `server` 统一了约定——`-h` 给出可复制命令、`[n/N]` 步骤、`[done]`、Ctrl-C 打 `[stop]` 且退出码 0——并新增 `examples/README.md`（含中文版）说明每个示例回答什么问题。
+
+### 修复
+
+- `SerialConfig.StopBits` 取 `OneStopBit`（默认值）时实际向驱动要了 **两个** 停止位，而 `TwoStopBits` 被判为非法：公开类型数的是位数，`go.bug.st/serial` 用的是枚举值，必须映射不能直接转换。
+- 客户端正常断开不再进 `OnError`：帧边界上的 `io.EOF` 与帧中间的 `wire.ErrIncomplete` 是断开而不是服务端故障（此前繁忙服务端的日志里一半是它们）；完整收到但格式错的帧仍然上报。
