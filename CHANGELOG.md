@@ -117,6 +117,12 @@
 - CI gained the `integration` job (the reference implementations and the serial
   link) next to the existing `race` and `fuzz` ones, so the four gates of the
   research baseline are all run by the workflow.
+- `docs/` exists: `ARCHITECTURE.md` (package map, the three transport families,
+  the client and server state machines, the wire boundary with gnety, and where
+  a new function code belongs) and `DEPLOYMENT.md` (serial parameters, the
+  timeout and retry budget, gateway configurations, failure modes and a deploy
+  checklist), both with a Chinese edition. The main README now links the
+  documentation instead of only pointing at `go doc`.
 - Examples: `examples/serial-server` runs an RTU slave and an RTU master against
   each other over loopback TCP or a socat pseudo-terminal pair, which is how the
   RTU paths are exercised with no serial device attached. `read-holding` and

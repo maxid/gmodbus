@@ -426,6 +426,16 @@ command line tool.
 
 ## Documentation
 
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): the package map, the three
+  transport families, the client and server state machines, and where a new
+  function code belongs.
+- [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md): serial parameters, the timeout and
+  retry budget, gateway configurations and the failure modes met first in the
+  field.
+- [`examples/README.md`](examples/README.md): what each example answers.
+- [`interop/README.md`](interop/README.md): the interoperability matrix and what
+  each layer needs to run.
+
 ```sh
 go doc -all .
 ```

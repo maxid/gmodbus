@@ -359,6 +359,13 @@ interop 模块用 `replace` 指向父目录，始终测试工作副本，不单�
 
 ## 文档
 
+- [`docs/ARCHITECTURE.zh-CN.md`](docs/ARCHITECTURE.zh-CN.md)：包地图、三类传输、客户端与
+  服务端状态机，以及一个新功能码该落在哪。
+- [`docs/DEPLOYMENT.zh-CN.md`](docs/DEPLOYMENT.zh-CN.md)：串口参数、超时与重试预算、网关
+  配置，以及现场最先遇到的失败模式。
+- [`examples/README.zh-CN.md`](examples/README.zh-CN.md)：每个示例回答什么问题。
+- [`interop/README.zh-CN.md`](interop/README.zh-CN.md)：互操作矩阵与每层运行的前提。
+
 ```sh
 go doc -all .
 ```
