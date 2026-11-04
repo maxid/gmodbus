@@ -16,7 +16,12 @@
 - [x] Optional automatic recovery for long-lived pollers instead of failing with
       `ErrClosed` after a lost connection
 - [ ] Per-task scheduling jitter to spread a large task list
-- [ ] Benchmarks and an interoperability matrix against real devices
+- [x] Benchmarks (`BenchmarkReadHolding` over loopback TCP, `BenchmarkRTUFrame`
+      for the framing) and an interoperability matrix against reference
+      implementations: pymodbus in a container in both directions, and RTU over
+      a pseudo-terminal pair
+- [ ] An interoperability run against real devices (a PLC or an RTU on a bench);
+      the results belong in `docs/PERFORMANCE.md`'s "Real devices" section
 
 Out of scope: RS485 half-duplex echo cancellation, the RTU 3.5-character silent
 interval, serial write timeouts, function codes 0x07/0x08/0x0B, device models and
