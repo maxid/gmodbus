@@ -27,3 +27,17 @@ jobs:
       - name: Interop vet
         working-directory: interop
         run: go vet ./...
+
+  # A client serializes callers on one wire and a server answers many connections
+  # at once, so the race detector is where a session, deadline or store bug shows
+  # up first. Ubuntu only — one platform runs it meaningfully, and three would
+  # triple the slowest job in the matrix.
+  race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+      - name: Test with the race detector
+        run: go test -race ./...
