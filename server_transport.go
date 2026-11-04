@@ -193,9 +193,11 @@ func encodeMessage(msg modbus.Message) ([]byte, error) {
 }
 
 // exceptionForFunction builds an exception response for a raw function code,
-// including a code the codec could not decode.
+// including a code the codec could not decode. The base code is what the frame
+// carries: the exception bit is set when the frame is encoded, so a function code
+// that already has it is masked instead of producing an unencodable answer.
 func exceptionForFunction(function byte, code modbus.ExceptionCode) *modbus.Exception {
-	return &modbus.Exception{FunctionCode: function, Code: code}
+	return &modbus.Exception{FunctionCode: function &^ 0x80, Code: code}
 }
 
 // datagramHandler answers UDP and DTLS datagrams through gnety sessions.

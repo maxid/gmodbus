@@ -1,10 +1,12 @@
 package gmodbus
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"errors"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -379,5 +381,36 @@ func TestStreamDisconnectIsNotReported(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("OnError was not called for a malformed frame")
+	}
+}
+
+// TestExceptionFormRequestIsAnswered checks that a request whose function code
+// already has the exception bit set (0x83, which no request may use) is answered
+// with a legal IllegalFunction exception rather than dropped on the floor: the
+// answer's function code is the masked base with the bit set again by the encoder.
+func TestExceptionFormRequestIsAnswered(t *testing.T) {
+	srv := newTestServer(t, nil)
+	conn, err := net.Dial("tcp", srv.Addr())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+
+	// MBAP: transaction 1, protocol 0, length 3 (unit id plus the two-byte PDU).
+	request := []byte{0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0x01, 0x83, 0x02}
+	if _, err := conn.Write(request); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	frame, err := modbus.Read(bufio.NewReader(conn), 0)
+	if err != nil {
+		t.Fatalf("read answer: %v", err)
+	}
+	want := []byte{0x83, byte(modbus.ExceptionIllegalFunction)}
+	if !slices.Equal(frame.PDU, want) {
+		t.Fatalf("answer PDU = %x, want %x", frame.PDU, want)
+	}
+	if frame.TransactionID != 1 || frame.UnitID != 1 {
+		t.Fatalf("answer transaction %d unit %d, want 1/1", frame.TransactionID, frame.UnitID)
 	}
 }

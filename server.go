@@ -372,10 +372,7 @@ func (s *Server) dispatch(ctx context.Context, unit uint8, req modbus.Message) (
 		resp, err := s.device.handle(idReq, s.maxPDU)
 		return s.finish(req, resp, err)
 	}
-	return s.finish(req, nil, &modbus.Exception{
-		FunctionCode: req.Function(),
-		Code:         modbus.ExceptionIllegalFunction,
-	})
+	return s.finish(req, nil, exceptionFor(req, modbus.ExceptionIllegalFunction))
 }
 
 // finish turns a handler result into a response message. A nil response with no
@@ -404,8 +401,11 @@ func (s *Server) finish(req modbus.Message, resp modbus.Message, err error) (mod
 }
 
 // exceptionFor builds an exception response for the request's function code.
+// The code is masked to its base: a request whose function code already carries
+// the exception bit (0x83 for 0x03) is nonsense, but it still has to be answered
+// with a legal exception frame rather than dropped or built unencodable.
 func exceptionFor(req modbus.Message, code modbus.ExceptionCode) *modbus.Exception {
-	return &modbus.Exception{FunctionCode: req.Function(), Code: code}
+	return &modbus.Exception{FunctionCode: req.Function() &^ 0x80, Code: code}
 }
 
 // handleRequest dispatches one decoded request, applies the RTU broadcast rule
