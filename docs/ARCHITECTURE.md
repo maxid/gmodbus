@@ -110,11 +110,13 @@ stateDiagram-v2
   exponential backoff and redials inside the caller's context, then retries the
   in-flight request. A TLS/DTLS configuration failure is permanent and gives up
   the policy's budget immediately.
-- `Poll` runs every `Task` on its own period, starts each task immediately,
-  never overlaps a task with itself, and reports errors through a callback
-  without stopping the loop. Tasks share the exchange slot like any other
-  caller, so a large task list is serialized on the wire — that is the reason
-  `MinTaskInterval` exists.
+- `Poll` runs every `Task` on its own period, starts each task immediately
+  unless `Task.Jitter` delays that first run to a random offset below it, never
+  overlaps a task with itself, and reports errors through a callback without
+  stopping the loop. Only the start is jittered: the period stays exact, so a
+  task cannot drift. Tasks share the exchange slot like any other caller, so a
+  large task list is serialized on the wire — that is the reason
+  `MinTaskInterval` exists, and the reason `Jitter` does.
 
 ## Server state
 

@@ -17,6 +17,8 @@
 
 - `hook.MetricsFunc` 与 `hook.ServerMetricsFunc`：一个闭包即可当钩子，不必起名字类型。
 
+- `Task.Jitter`：被轮询的任务可以按该抖动内的随机偏移延后第一次运行，而不是立即开始——这是大任务列表不再在同一瞬间全发、挤在客户端单一交换槽上的办法。只抖动起点，周期仍精确等于 `Every`；零值保持立即开始；抖动大于间隔会被拒绝。
+
 - **破坏性变更：**统一入口 `NewClient(ctx, ClientConfig)` 取代 `Dial`/`Config`；客户端按 `Network` 支持 TCP、TLS、UDP、DTLS、串口 RTU、RTU over TCP 与 RTU over UDP。`ErrTransactionMismatch` 改为 `ErrResponseMismatch`，因为 RTU 应答按 unit id 与功能码匹配，没有 transaction id。
 - 新增服务端：`NewServer(ctx, ServerConfig)` 提供同样七种传输。`Handler` 优先，`MemoryStore` 按 unit 应答标准功能码，`DeviceIdentification` 应答 0x2B/0x0E。RTU unit 0 是广播：写生效不回包，读被拒绝；Handler panic 恢复为 `ServerDeviceFailure`。
 - 新增 `MemoryStore`：每个 unit 独立的线圈、离散输入、保持寄存器、输入寄存器，按 `UnitConfig` 定容、懒创建，`OnWrite` 在锁外回调。

@@ -15,7 +15,8 @@
       `PacketConn` for servers
 - [x] Optional automatic recovery for long-lived pollers instead of failing with
       `ErrClosed` after a lost connection
-- [ ] Per-task scheduling jitter to spread a large task list
+- [x] Per-task scheduling jitter (`Task.Jitter`) to spread a large task list off
+      the same instant
 - [x] Benchmarks (`BenchmarkReadHolding` over loopback TCP, `BenchmarkRTUFrame`
       for the framing) and an interoperability matrix against reference
       implementations: pymodbus in a container in both directions, and RTU over

@@ -66,9 +66,10 @@ cli, _ := gmodbus.NewClient(ctx, gmodbus.ClientConfig{
 })
 
 err := cli.Poll(ctx, []gmodbus.Task{{
-    Name:  "tank-level",
-    Every: 5 * time.Second, // > 3 × (500ms + dial)
-    Do:    func(ctx context.Context) error { _, err := cli.ReadHoldingRegisters(ctx, 3, 0, 4); return err },
+    Name:   "tank-level",
+    Every:  5 * time.Second,                  // > 3 × (500ms + dial)
+    Jitter: 500 * time.Millisecond,           // spread a long task list
+    Do:     func(ctx context.Context) error { _, err := cli.ReadHoldingRegisters(ctx, 3, 0, 4); return err },
 }}, func(task gmodbus.Task, err error) { log.Printf("poll %s: %v", task.Name, err) })
 ```
 
@@ -76,6 +77,10 @@ Two rules that matter in the field:
 
 - **`Retries` does not cover exceptions.** A device answering `IllegalDataAddress`
   is telling you the request is wrong; retrying it five times only adds traffic.
+- **A long task list needs `Task.Jitter`.** Without it every task reads at t=0
+  and again on every common multiple of their periods, and the queue on the one
+  exchange slot — not the devices — decides who waits. A value around one poll
+  period spreads them evenly; the period itself stays exact.
 - **Do not stack `Retries` and a `ReconnectPolicy`.** With a policy, a transport
   failure spends the policy's budget; `Retries` then only governs timeouts. Pick
   one recovery story per deployment.
@@ -179,7 +184,7 @@ What you see, what it means, what to change:
 ## Deploy checklist
 
 1. `Timeout` and `Every` chosen from the line math above, `Every` larger than the
-   worst-case call.
+   worst-case call, and a `Jitter` on every task when the list is long.
 2. One recovery story: `Retries` for a short-lived process, a `ReconnectPolicy`
    for a poller.
 3. Serial parameters copied from the device sheet, not from this document.

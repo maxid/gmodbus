@@ -20,6 +20,17 @@ type Task struct {
 	// Every is the period between two runs of Do. It must be at least
 	// MinTaskInterval.
 	Every time.Duration
+	// Jitter spreads a large task list. When it is non-zero the first run of the
+	// task starts at a random moment in [0, Jitter) instead of immediately; the
+	// period stays Every, so the schedule never drifts or slips. Zero keeps the
+	// immediate first run.
+	//
+	// It exists because tasks of one client share one exchange slot: without a
+	// jitter every task reads at t=0 and again on every common multiple of their
+	// periods, so the queue, not the device, decides how long the last task waits.
+	// It must not exceed Every: a start delayed beyond the first period is a
+	// mistake, not a schedule.
+	Jitter time.Duration
 	// Do performs the work. It receives the Poll context and must return when
 	// that context ends; Poll waits for an in-flight Do to return.
 	Do func(context.Context) error
@@ -27,9 +38,10 @@ type Task struct {
 
 // Poll runs every task on its own schedule until ctx is done.
 //
-// Each task starts immediately and then runs again Every after its previous run
-// returned, so a slow Do never overlaps itself. Tasks run concurrently; the
-// client serializes their requests on the wire like any other caller.
+// Each task starts immediately — or, with Task.Jitter set, at a random moment
+// below that jitter — and then runs again Every after its previous run returned,
+// so a slow Do never overlaps itself. Tasks run concurrently; the client
+// serializes their requests on the wire like any other caller.
 //
 // A task that returns an error is reported through onError and then scheduled
 // again: one failing task never stops the loop or the other tasks. onError is
@@ -64,7 +76,7 @@ func (c *Client) Poll(ctx context.Context, tasks []Task, onError func(Task, erro
 		wg.Add(1)
 		go func(task Task) {
 			defer wg.Done()
-			runTask(ctx, task, report)
+			runTask(ctx, task, c.jitter, report)
 		}(task)
 	}
 	wg.Wait()
@@ -72,10 +84,17 @@ func (c *Client) Poll(ctx context.Context, tasks []Task, onError func(Task, erro
 }
 
 // runTask runs one task on its own timer until ctx ends.
-func runTask(ctx context.Context, task Task, report func(Task, error)) {
+func runTask(ctx context.Context, task Task, jitter func(int64) int64, report func(Task, error)) {
 	// The first run happens immediately: a poller should not wait a full period
-	// before the first read of a device.
-	timer := time.NewTimer(0)
+	// before the first read of a device. A task that asked for a jittered start
+	// waits a random offset below Jitter instead, which is what spreads a large
+	// task list off the t=0 cliff. Only the start is jittered: the period stays
+	// exactly Every, so two runs of one task are never closer than that.
+	first := time.Duration(0)
+	if task.Jitter > 0 {
+		first = time.Duration(jitter(int64(task.Jitter)))
+	}
+	timer := time.NewTimer(first)
 	defer timer.Stop()
 	for {
 		select {
@@ -109,6 +128,11 @@ func validateTasks(tasks []Task) error {
 		case task.Every < MinTaskInterval:
 			return fmt.Errorf("gmodbus: poll task %q interval %s is below the %s minimum",
 				task.Name, task.Every, MinTaskInterval)
+		case task.Jitter < 0:
+			return fmt.Errorf("gmodbus: poll task %q jitter %s is negative", task.Name, task.Jitter)
+		case task.Jitter > task.Every:
+			return fmt.Errorf("gmodbus: poll task %q jitter %s is above its interval %s",
+				task.Name, task.Jitter, task.Every)
 		case task.Do == nil:
 			return fmt.Errorf("gmodbus: poll task %q has no Do func", task.Name)
 		}

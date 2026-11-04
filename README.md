@@ -30,7 +30,8 @@ A **Modbus client and server** for Go, built on the typed Modbus codec in
   checksum. A serial line always keeps it.
 - RTU broadcast (unit 0): a write with no reply; a read is refused.
 - Low-cardinality client and server metrics hooks with nil-hook fast paths.
-- A polling runner that keeps independent tasks on their own schedule.
+- A polling runner that keeps independent tasks on their own schedule, with an
+  optional per-task jitter that spreads a large task list off the same instant.
 
 ## Install
 
@@ -340,6 +341,35 @@ The whole sequence runs inside the caller's context and holds the single exchang
 slot. `Close` interrupts a backoff wait or connect immediately. A permanent
 TLS/DTLS configuration failure (`ErrTLSConfig`) ends the sequence at once instead
 of spending the budget.
+
+### Polling
+
+`Client.Poll` runs a task list until the context ends. Each task starts
+immediately — unless `Task.Jitter` is set, which delays its first run to a random
+moment below that jitter — and then runs again `Every` after its previous run
+returned, so a slow `Do` never overlaps itself. `Every` must be at least
+`MinTaskInterval` (10ms), and tasks share the client's single exchange slot, so
+the runner serializes them on the wire like any other caller.
+
+```go
+read := func(unit uint8) func(context.Context) error {
+    return func(ctx context.Context) error {
+        _, err := cli.ReadHoldingRegisters(ctx, unit, 0, 4)
+        return err
+    }
+}
+
+err := cli.Poll(ctx, []gmodbus.Task{
+    {Name: "tank", Every: 2 * time.Second, Jitter: 500 * time.Millisecond, Do: read(3)},
+    {Name: "pump", Every: 5 * time.Second, Jitter: 500 * time.Millisecond, Do: read(4)},
+}, func(task gmodbus.Task, err error) { log.Printf("poll %s: %v", task.Name, err) })
+```
+
+A task that returns an error is reported and scheduled again: one failing task
+never stops the loop or the others. `Jitter` is for a large list — without it
+every task reads at t=0 and again on every common multiple of their periods, so
+the queue, not the device, decides how long the last one waits. It jitters the
+start only; the period stays exactly `Every`, and it must not exceed it.
 
 ### TLS and DTLS
 

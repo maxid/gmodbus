@@ -57,9 +57,10 @@ cli, _ := gmodbus.NewClient(ctx, gmodbus.ClientConfig{
 })
 
 err := cli.Poll(ctx, []gmodbus.Task{{
-    Name:  "tank-level",
-    Every: 5 * time.Second, // > 3 × (500ms + dial)
-    Do:    func(ctx context.Context) error { _, err := cli.ReadHoldingRegisters(ctx, 3, 0, 4); return err },
+    Name:   "tank-level",
+    Every:  5 * time.Second,                  // > 3 × (500ms + dial)
+    Jitter: 500 * time.Millisecond,           // 任务列表长时打散起点
+    Do:     func(ctx context.Context) error { _, err := cli.ReadHoldingRegisters(ctx, 3, 0, 4); return err },
 }}, func(task gmodbus.Task, err error) { log.Printf("poll %s: %v", task.Name, err) })
 ```
 
@@ -67,6 +68,9 @@ err := cli.Poll(ctx, []gmodbus.Task{{
 
 - **`Retries` 不覆盖异常应答。** 设备回 `IllegalDataAddress` 是在说请求本身错了，重试五次只会
   多产生流量。
+- **任务列表长就要设 `Task.Jitter`。** 不设的话所有任务都在 t=0 读一次、之后又在各自周期的公倍数
+  上撞在一起，决定谁等多久的是单一交换槽上的队列，不是设备。取值约一个轮询周期即可打散；周期本身
+  保持精确。
 - **别把 `Retries` 与 `ReconnectPolicy` 叠着用。** 有策略时，传输失败花的是策略的预算，
   `Retries` 只再管超时。每次部署只选一种恢复故事。
 
@@ -153,7 +157,8 @@ Modbus 本身没有认证，也没有加密。线路上只要能到 502 端口�
 
 ## 部署清单
 
-1. `Timeout` 与 `Every` 按上面的线路算术定，`Every` 大于最坏情况的一次调用。
+1. `Timeout` 与 `Every` 按上面的线路算术定，`Every` 大于最坏情况的一次调用；任务表长时每个任务都
+   带上 `Jitter`。
 2. 只选一种恢复故事：短生命周期进程用 `Retries`，轮询方用 `ReconnectPolicy`。
 3. 串口参数抄设备手册，不抄本文。
 4. 健康检查读一个已知寄存器，并区分超时与异常。

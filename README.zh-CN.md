@@ -286,6 +286,31 @@ handler 返回 `hook.ErrUnhandled` 表示交给服务端回退到 `MemoryStore`�
 整个过程在调用方 context 内、占用单一交换槽；`Close` 立即打断退避或连接。永久 TLS/DTLS
 配置错误（`ErrTLSConfig`）直接结束，不消耗预算。
 
+### 轮询
+
+`Client.Poll` 跑一个任务列表直到 context 结束。每个任务立即开始——除非设了 `Task.Jitter`，
+那会把它第一次运行推迟到该抖动内的随机时刻——之后每次在上一次 `Do` 返回后再等 `Every`，
+所以慢的 `Do` 不会与自身重叠。`Every` 至少是 `MinTaskInterval`（10ms）；任务共享客户端的单一
+交换槽，因此与其它调用方一样在线路上串行。
+
+```go
+read := func(unit uint8) func(context.Context) error {
+    return func(ctx context.Context) error {
+        _, err := cli.ReadHoldingRegisters(ctx, unit, 0, 4)
+        return err
+    }
+}
+
+err := cli.Poll(ctx, []gmodbus.Task{
+    {Name: "tank", Every: 2 * time.Second, Jitter: 500 * time.Millisecond, Do: read(3)},
+    {Name: "pump", Every: 5 * time.Second, Jitter: 500 * time.Millisecond, Do: read(4)},
+}, func(task gmodbus.Task, err error) { log.Printf("poll %s: %v", task.Name, err) })
+```
+
+返回错误的任务会被上报并重新排期：一个失败的任务不会停掉循环或其它任务。`Jitter` 是给大任务
+列表用的——没有它，所有任务都在 t=0 读一次，之后又在各自周期的所有公倍数上撞在一起，于是决定
+最后一个任务等多久的是队列而不是设备。它只抖动起点，周期仍然是精确的 `Every`，且不得超过它。
+
 ### TLS 与 DTLS
 
 客户端在 `DialTimeout` 内完成握手；服务端按传入的 `*tls.Config`/`*dtls.Config` 使用。

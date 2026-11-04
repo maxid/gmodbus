@@ -16,6 +16,12 @@
 
 - `hook.MetricsFunc` and `hook.ServerMetricsFunc`: a one-closure hook needs no named type.
 
+- `Task.Jitter`: a polled task can start at a random offset below it instead of
+  immediately, which is how a large task list stops firing at the same instant
+  and queueing on the client's one exchange slot. Only the start is jittered —
+  the period stays exactly `Every` — the zero value keeps the immediate first
+  run, and a jitter larger than the interval is rejected.
+
 - **Breaking:** the unified `NewClient(ctx, ClientConfig)` entry point replaces
   `Dial`/`Config`; the client supports TCP, TLS, UDP, DTLS, serial RTU, RTU over
   TCP and RTU over UDP, selected by `Network`. `ErrTransactionMismatch` is now

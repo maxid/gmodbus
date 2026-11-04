@@ -14,7 +14,7 @@
 - [x] 每任务 schedule 的 polling runner
 - [x] 可注入传输：串口 `Port`，服务端 `Listener`/`PacketConn`
 - [x] 长生命周期 poller 的可选自动恢复，而不是断连后直接 `ErrClosed`
-- [ ] per-task schedule 抖动，打散大任务列表
+- [x] per-task schedule 抖动（`Task.Jitter`），把大任务列表打散出“同一瞬间全发”
 - [x] 基准（回环 TCP 的 `BenchmarkReadHolding`、只测分帧的 `BenchmarkRTUFrame`）与对参考实现的
       互操作矩阵：容器里的 pymodbus 双向，以及伪终端对上的 RTU
 - [ ] 与真机的互操作（台子上的一台 PLC 或 RTU），结果记入 `docs/PERFORMANCE.md` 的
